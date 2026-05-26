@@ -29,7 +29,7 @@ export async function POST(req: Request) {
     body: JSON.stringify({
       version: REPLICATE_MODEL,
       input: {
-        music_input: sourceUrl,
+        input_audio: sourceUrl,
         prompt: prompt ?? "upbeat full band accompaniment",
         duration: 30,
       },
