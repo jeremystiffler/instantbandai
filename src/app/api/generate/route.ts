@@ -5,9 +5,12 @@ import { getPublicUrl } from "@/lib/r2";
 import { NextResponse } from "next/server";
 import {
   DEMUCS_VERSION,
+  ACE_STEP_VERSION,
   GENERATE_STEMS,
-  buildMusicGenInput,
+  buildLoopInput,
+  buildFullMixInput,
   startAllStemPredictions,
+  startPrediction,
   type GenerateStem,
 } from "@/lib/musicgen";
 
@@ -21,12 +24,13 @@ export async function POST(req: Request) {
   const {
     key,
     sourceUrl: providedSourceUrl,
-    mode = "separate", // "separate" | "generate"
-    sliders = {},      // { drums:0, bass:0, ... } defaults to 0 per stem
-    extraStems = [],   // ["percussion", "acoustic-guitar"] — extra instruments
+    mode = "loops",        // "separate" | "loops" | "fullmix"
+    sliders = {},
+    extraStems = [],
     bpm,
     musicKey,
-    duration = 30,
+    duration = 45,
+    fullMixPrompt = "cinematic, orchestral, emotional, modern",
   } = await req.json();
 
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
@@ -34,8 +38,10 @@ export async function POST(req: Request) {
 
   const sourceUrl = providedSourceUrl ?? getPublicUrl(key);
   const apiToken = process.env.REPLICATE_API_TOKEN!;
+  const baseUrl = (process.env.NEXTAUTH_URL || "https://instantbandai.com").replace(/\/$/, "");
+  const webhookUrl = `${baseUrl}/api/webhook/replicate`;
 
-  // ─── SEPARATE MODE (Demucs) ─────────────────────────────────────────────────
+  // ─── SEPARATE MODE (Demucs) ──────────────────────────────────────────────
   if (mode === "separate") {
     const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
@@ -74,15 +80,50 @@ export async function POST(req: Request) {
     return NextResponse.json({ id: generation.id });
   }
 
-  // ─── GENERATE MODE (MusicGen per-stem) ─────────────────────────────────────
-  // Fire stems sequentially with 2.5s stagger to avoid Replicate 429 rate limits.
-  // Each stem runs in parallel on Replicate's GPU once started — stagger only affects start time.
-  const allStemIds = [...GENERATE_STEMS, ...((extraStems as string[]) ?? [])];
-  const baseUrl = (process.env.NEXTAUTH_URL || "https://instantbandai.com").replace(/\/$/, "");
-  const webhookUrl = `${baseUrl}/api/webhook/replicate`;
+  // ─── FULL MIX MODE (ACE-Step — single stereo track) ─────────────────────
+  if (mode === "fullmix") {
+    const input = buildFullMixInput(fullMixPrompt, bpm, musicKey, duration);
+    const generation = await prisma.generation.create({
+      data: {
+        userId: user.id,
+        sourceUrl,
+        status: "processing",
+        mode: "fullmix",
+        bpm: bpm ?? null,
+        key: musicKey ?? null,
+        stemPredictions: {},
+      },
+    });
 
-  // Create the generation record first so webhook can reference it
-  const normalizedSliders = Object.fromEntries(allStemIds.map((s) => [s, sliders[s as GenerateStem] ?? 0]));
+    (async () => {
+      try {
+        const predId = await startPrediction(
+          ACE_STEP_VERSION,
+          input as unknown as Record<string, unknown>,
+          apiToken,
+          webhookUrl
+        );
+        await prisma.generation.update({
+          where: { id: generation.id },
+          data: { stemPredictions: { fullmix: predId } },
+        });
+      } catch (e) {
+        console.error("ACE-Step start failed:", e);
+        await prisma.generation.update({
+          where: { id: generation.id },
+          data: { status: "failed" },
+        });
+      }
+    })();
+
+    return NextResponse.json({ id: generation.id });
+  }
+
+  // ─── LOOPS MODE (Stable Audio — per-stem 8s loops) ──────────────────────
+  const allStemIds = [...GENERATE_STEMS, ...((extraStems as string[]) ?? [])];
+  const normalizedSliders = Object.fromEntries(
+    allStemIds.map((s) => [s, sliders[s as GenerateStem] ?? 0])
+  );
   const generation = await prisma.generation.create({
     data: {
       userId: user.id,
@@ -97,15 +138,13 @@ export async function POST(req: Request) {
     },
   });
 
-  // Start predictions staggered (non-blocking — we return the generation ID immediately)
-  // Use void to fire-and-forget; Vercel function stays alive long enough for all starts
   (async () => {
     const stemPredictions = await startAllStemPredictions(
       allStemIds,
-      (stem) => buildMusicGenInput(stem as GenerateStem, sliders[stem] ?? 0, sourceUrl, bpm, musicKey, duration),
+      (stem) => buildLoopInput(stem, bpm, musicKey),
       apiToken,
       webhookUrl,
-      2500
+      2000
     );
     if (Object.keys(stemPredictions).length > 0) {
       await prisma.generation.update({

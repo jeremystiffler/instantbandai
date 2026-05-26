@@ -4,8 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import {
   DEMUCS_VERSION,
-  buildMusicGenInput,
-  startMusicGenPrediction,
+  STABLE_AUDIO_VERSION,
+  buildLoopInput,
+  startPrediction,
   type GenerateStem,
   GENERATE_STEMS,
 } from "@/lib/musicgen";
@@ -78,16 +79,13 @@ export async function POST(req: Request) {
     updatedSliders[s] = sliderVal;
     // Clear existing stem URL so status polling picks up the new prediction
     delete updatedStems[s];
-    const input = buildMusicGenInput(
+    const input = buildLoopInput(
       s,
-      sliderVal,
-      original.sourceUrl,
-      original.bpm,
-      original.key,
-      30
+      original.bpm ?? 120,
+      original.key ?? undefined
     );
     try {
-      const predId = await startMusicGenPrediction(input, apiToken);
+      const predId = await startPrediction(STABLE_AUDIO_VERSION, input as unknown as Record<string, unknown>, apiToken);
       newPredictions[s] = predId;
     } catch (e) {
       console.error(`MusicGen rerender failed for ${s}:`, e);

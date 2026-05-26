@@ -1,20 +1,21 @@
 /**
- * MusicGen helper — builds Replicate input params from a similarity slider.
+ * Audio generation helpers for InstantBandAI
  *
- * slider = 0   → mirror mode  (continuation=true, low temp, high CFG)
- * slider = 50  → complement   (melody mimicry, mid temp/CFG)
- * slider = 100 → original     (text-prompt only, high temp, low CFG)
+ * Two generation modes:
+ *  "loops"   — Stable Audio Open: 8s instrument loops, looped client-side. Clean, isolated, musical.
+ *  "fullmix" — ACE-Step: full stereo song from text prompt, 30–60s.
  */
-
-export const MUSICGEN_VERSION =
-  "b05b1dff1d8c6dc63d14b0cdb42135378dcb87f6373b0d3d341ede46e59e2b38"; // legacy ref
-
-// musicgen-chord: follows chord progressions + BPM locked
-export const MUSICGEN_CHORD_VERSION =
-  "c940ab4308578237484f90f010b2b3871bf64008e95f26f4d567529ad019a3d6";
 
 export const DEMUCS_VERSION =
   "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
+
+// Stable Audio Open — short isolated instrument loops
+export const STABLE_AUDIO_VERSION =
+  "9aff84a639f96d0f7e6081cdea002d15133d0043727f849c40abdd166b7c75a8";
+
+// ACE-Step — full stereo song generation
+export const ACE_STEP_VERSION =
+  "280fc4f9ee507577f880a167f639c02622421d8fecf492454320311217b688f1";
 
 export const GENERATE_STEMS = ["drums", "bass", "guitar", "keys", "strings"] as const;
 export const SEPARATE_STEMS = ["vocals", "bass", "drums", "guitar", "piano", "other"] as const;
@@ -156,76 +157,122 @@ const STEM_PROMPTS: Record<string, string> = {
   ...VARIANT_PROMPTS,
 };
 
-export interface MusicGenInput {
+// ─── STABLE AUDIO — Instrument Loop Builder ────────────────────────────────
+
+/** Stable Audio prompt per stem — very specific, single-instrument descriptors */
+const LOOP_PROMPTS: Record<string, string> = {
+  drums:   "isolated drum loop, tight kick and snare, hi-hat groove, no other instruments, clean studio recording",
+  bass:    "isolated electric bass guitar loop, melodic groove, clean fingerstyle tone, no other instruments",
+  guitar:  "isolated electric guitar loop, clean chord strumming, no other instruments, studio quality",
+  keys:    "isolated grand piano loop, melodic chords, clean tone, no other instruments, studio quality",
+  strings: "isolated orchestral strings loop, smooth ensemble bowing, lush sustain, no other instruments",
+  other:   "isolated ambient pad loop, evolving texture, no percussion, no melody, atmospheric",
+  ...VARIANT_PROMPTS,
+};
+
+export interface StableAudioInput {
   prompt: string;
-  audio_chords: string;       // source audio — model extracts chords internally via BTC
-  bpm: number;                // hard BPM lock (not a prompt hint)
-  time_sig: string;
-  duration: number;
-  chroma_coefficient: number; // how strictly to follow chords (0.5–2.5)
-  continuation: boolean;
-  temperature: number;
-  classifier_free_guidance: number;
-  top_k: number;
-  output_format: "wav" | "mp3";
-  normalization_strategy: "loudness";
+  negative_prompt: string;
+  seconds_start: number;
+  seconds_total: number;
+  cfg_scale: number;
+  steps: number;
+  seed: number;
+  sampler_type: string;
+  sigma_min: number;
+  sigma_max: number;
+  init_noise_level: number;
+  batch_size: number;
 }
 
 /**
- * Build musicgen-chord input.
- * Uses sakemin/musicgen-chord which:
- *  - Extracts chord progression from audio_chords via BTC model
- *  - Locks generation to the provided BPM (numeric, not a hint)
- *  - Follows chord progression strictly (chroma_coefficient controls tightness)
+ * Build Stable Audio input for a single instrument loop (8s).
+ * BPM is embedded in the prompt — Stable Audio was trained on Freesound loops
+ * tagged with BPM so it follows it reliably.
  */
-export function buildMusicGenInput(
+export function buildLoopInput(
   stem: string,
-  slider: number,
-  sourceUrl: string,
   bpm?: number | null,
   key?: string | null,
-  duration = 30
-): MusicGenInput {
-  const s = Math.max(0, Math.min(100, slider));
-
-  // temperature: 0.8 (tight/mirror) → 1.1 (more original)
-  const temperature = 0.8 + (s / 100) * 0.3;
-  // CFG: 4 (tight) → 3 (creative)
-  const cfg = s < 50 ? 4 : 3;
-  // chroma_coefficient: how strictly to follow the chord progression
-  // slider=0 (mirror) → 1.8 (very tight), slider=100 (original) → 0.8 (looser)
-  const chromaCoeff = parseFloat((1.8 - (s / 100) * 1.0).toFixed(2));
-
-  const keyStr = key ? `, key of ${key}` : "";
-  const styleStr = s < 33 ? ", subtle and supportive, low in the mix"
-                 : s < 66 ? ", balanced melodic presence"
-                 :           ", expressive and prominent";
-  const prompt = `${STEM_PROMPTS[stem]}${keyStr}${styleStr}, high quality professional studio recording`;
+): StableAudioInput {
+  const bpmStr = bpm ? `${Math.round(bpm)} BPM, ` : "";
+  const keyStr = key ? `key of ${key}, ` : "";
+  const basePrompt = LOOP_PROMPTS[stem] ?? LOOP_PROMPTS["other"];
+  const prompt = `${bpmStr}${keyStr}${basePrompt}`;
+  const negative = "distortion, noise, clipping, other instruments bleeding in, full mix, choir, vocals";
 
   return {
     prompt,
-    audio_chords: sourceUrl,
-    bpm: bpm ? Math.round(bpm) : 120,
-    time_sig: "4/4",
-    duration,
-    chroma_coefficient: chromaCoeff,
-    continuation: false,
-    temperature,
-    classifier_free_guidance: cfg,
-    top_k: 250,
-    output_format: "wav",
-    normalization_strategy: "loudness",
+    negative_prompt: negative,
+    seconds_start: 0,
+    seconds_total: 8,
+    cfg_scale: 7,
+    steps: 100,
+    seed: -1,
+    sampler_type: "dpmpp-3m-sde",
+    sigma_min: 0.03,
+    sigma_max: 500,
+    init_noise_level: 1,
+    batch_size: 1,
   };
 }
 
-/** Fire a single MusicGen prediction on Replicate, return prediction ID.
- *  Retries once on 429 after a 12-second backoff. */
-export async function startMusicGenPrediction(
-  input: MusicGenInput,
+// ─── ACE-STEP — Full Mix Builder ────────────────────────────────────────────
+
+export interface AceStepInput {
+  tags: string;
+  lyrics: string;
+  duration: number;
+  seed: number;
+  number_of_steps: number;
+  scheduler: string;
+  guidance_type: string;
+  guidance_scale: number;
+  granularity_scale: number;
+  guidance_interval: number;
+  min_guidance_scale: number;
+}
+
+/**
+ * Build ACE-Step input for a full stereo song.
+ * Tags drive style/instrumentation; lyrics use [instrumental] for no vocals.
+ */
+export function buildFullMixInput(
+  prompt: string,
+  bpm?: number | null,
+  key?: string | null,
+  duration = 45,
+): AceStepInput {
+  const bpmTag = bpm ? `${Math.round(bpm)} BPM` : "";
+  const keyTag = key ? `key of ${key}` : "";
+  const tags = [prompt, bpmTag, keyTag, "high quality", "studio recording"]
+    .filter(Boolean).join(", ");
+
+  return {
+    tags,
+    lyrics: "[instrumental]",
+    duration,
+    seed: -1,
+    number_of_steps: 60,
+    scheduler: "euler",
+    guidance_type: "apg",
+    guidance_scale: 15,
+    granularity_scale: 10,
+    guidance_interval: 0.5,
+    min_guidance_scale: 3,
+  };
+}
+
+// ─── Replicate API helpers ──────────────────────────────────────────────────
+
+/** Fire a single prediction on Replicate. Retries once on 429. */
+export async function startPrediction(
+  version: string,
+  input: Record<string, unknown>,
   apiToken: string,
   webhookUrl?: string
 ): Promise<string> {
-  const body: Record<string, unknown> = { version: MUSICGEN_CHORD_VERSION, input };
+  const body: Record<string, unknown> = { version, input };
   if (webhookUrl) {
     body.webhook = webhookUrl;
     body.webhook_events_filter = ["completed"];
@@ -244,7 +291,6 @@ export async function startMusicGenPrediction(
 
   let res = await attempt();
   if (res.status === 429) {
-    // Rate limited — wait 12s and try once more
     await new Promise((r) => setTimeout(r, 12_000));
     res = await attempt();
   }
@@ -257,25 +303,38 @@ export async function startMusicGenPrediction(
   return prediction.id as string;
 }
 
-/** Fire all stems sequentially with a stagger gap to avoid rate-limit 429s.
- *  Returns map of stemId → prediction ID (nulls filtered out). */
+/** Legacy alias used by generate route */
+export type MusicGenInput = StableAudioInput;
+export const startMusicGenPrediction = (
+  input: StableAudioInput,
+  apiToken: string,
+  webhookUrl?: string
+) => startPrediction(STABLE_AUDIO_VERSION, input as unknown as Record<string, unknown>, apiToken, webhookUrl);
+
+/** Fire all stem loops sequentially (staggered to avoid 429). */
 export async function startAllStemPredictions(
   stems: string[],
-  buildInput: (stem: string) => MusicGenInput,
+  buildInput: (stem: string) => StableAudioInput,
   apiToken: string,
   webhookUrl?: string,
-  staggerMs = 2500
+  staggerMs = 2000
 ): Promise<Record<string, string>> {
   const results: Record<string, string> = {};
   for (let i = 0; i < stems.length; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, staggerMs));
     const stem = stems[i];
     try {
-      const predId = await startMusicGenPrediction(buildInput(stem), apiToken, webhookUrl);
+      const predId = await startPrediction(
+        STABLE_AUDIO_VERSION,
+        buildInput(stem) as unknown as Record<string, unknown>,
+        apiToken,
+        webhookUrl
+      );
       results[stem] = predId;
     } catch (e) {
-      console.error(`MusicGen start failed for ${stem}:`, e);
+      console.error(`Stable Audio start failed for ${stem}:`, e);
     }
   }
   return results;
 }
+
