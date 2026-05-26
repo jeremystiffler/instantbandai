@@ -6,20 +6,20 @@ import { NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
 
-const REPLICATE_MODEL = "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
+const REPLICATE_MODEL = "25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953"; // Demucs 6s
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { key, sourceUrl: providedSourceUrl, prompt } = await req.json();
+  const { key, sourceUrl: providedSourceUrl } = await req.json();
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
   if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
   // Accept either a pre-resolved publicUrl or derive it from key
   const sourceUrl = providedSourceUrl ?? getPublicUrl(key);
 
-  // Start Replicate prediction
+  // Start Replicate prediction (Demucs stem separation)
   const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
@@ -29,9 +29,9 @@ export async function POST(req: Request) {
     body: JSON.stringify({
       version: REPLICATE_MODEL,
       input: {
-        input_audio: sourceUrl,
-        prompt: prompt ?? "upbeat full band accompaniment",
-        duration: 30,
+        audio: sourceUrl,
+        model_name: "htdemucs_6s",
+        output_format: "mp3",
       },
     }),
   });
@@ -39,7 +39,7 @@ export async function POST(req: Request) {
   if (!replicateRes.ok) {
     const err = await replicateRes.json();
     console.error("Replicate start error:", err);
-    return NextResponse.json({ error: "Failed to start generation" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to start stem separation" }, { status: 500 });
   }
 
   const prediction = await replicateRes.json();
@@ -50,6 +50,9 @@ export async function POST(req: Request) {
       sourceUrl,
       status: "processing",
       replicateId: prediction.id,
+      stems: undefined,
+      bpm: null,
+      key: null,
     },
   });
 
