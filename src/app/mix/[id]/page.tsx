@@ -258,6 +258,7 @@ export default function MixPage() {
   const [editingChords, setEditingChords] = useState(false);
   const [analysisReady, setAnalysisReady] = useState(false);
   const [analysisDoing, setAnalysisDoing] = useState(false);
+  const [autoAnalyze, setAutoAnalyze] = useState(false);
 
   const [tracks, setTracks] = useState<TrackState[]>([]);
   const [playing, setPlaying] = useState(false);
@@ -295,6 +296,11 @@ export default function MixPage() {
         ? (typeof data.extraStems === "string" ? JSON.parse(data.extraStems) : data.extraStems)
         : [];
       buildTracks(stemObj, data.sourceUrl, extraArr);
+
+      // Auto-run BPM + key analysis if not already stored
+      if (!data.bpm || !data.key) {
+        setAutoAnalyze(true);
+      }
     } else if (data.status === "failed") {
       setLoading(false);
       setPollingStatus("Generation failed. Please try again.");
@@ -310,6 +316,15 @@ export default function MixPage() {
     if (authStatus === "unauthenticated") router.push("/");
     if (authStatus === "authenticated") fetchGeneration();
   }, [authStatus, fetchGeneration]);
+
+  // Auto-trigger analysis once generation loads and BPM/key are missing
+  useEffect(() => {
+    if (autoAnalyze && !analysisDoing && !analysisReady) {
+      setAutoAnalyze(false);
+      runAnalysis();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoAnalyze]);
 
   // ── Build track list ─────────────────────────────────────────────────────
   function buildTracks(stems: Stems, sourceUrl: string, extraStemsArr: string[] = []) {
