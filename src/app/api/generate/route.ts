@@ -78,9 +78,8 @@ export async function POST(req: Request) {
   // Fire stems sequentially with 2.5s stagger to avoid Replicate 429 rate limits.
   // Each stem runs in parallel on Replicate's GPU once started — stagger only affects start time.
   const allStemIds = [...GENERATE_STEMS, ...((extraStems as string[]) ?? [])];
-  const webhookUrl = process.env.NEXTAUTH_URL
-    ? `${process.env.NEXTAUTH_URL}/api/webhook/replicate`
-    : undefined;
+  const baseUrl = (process.env.NEXTAUTH_URL || "https://instantbandai.com").replace(/\/$/, "");
+  const webhookUrl = `${baseUrl}/api/webhook/replicate`;
 
   // Create the generation record first so webhook can reference it
   const normalizedSliders = Object.fromEntries(allStemIds.map((s) => [s, sliders[s as GenerateStem] ?? 0]));

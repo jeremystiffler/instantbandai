@@ -45,9 +45,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
     return NextResponse.json(generation);
   }
 
-  // ─── GENERATE MODE (MusicGen — webhook-driven, just read DB) ────────────────
-  // Replicate webhooks update stems + status directly via /api/webhook/replicate.
-  // Status route just reads current DB state and returns progress.
+  // ─── GENERATE MODE: hybrid — webhook-driven but with Replicate fallback poll ─
   const stemPredictions = (generation.stemPredictions ?? {}) as Record<string, string>;
   const currentStems = (generation.stems ?? {}) as Record<string, string>;
 
@@ -57,15 +55,53 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
     : [];
   const allStemIds = [...GENERATE_STEMS, ...extraStems] as string[];
 
-  // If we have no prediction IDs yet, stems are still being started (stagger in progress)
+  // Find stems that have a prediction ID but no completed audio yet — poll these directly
+  const pendingStems = allStemIds.filter(
+    (s) => stemPredictions[s] && !currentStems[s]
+  );
+
+  let updatedStems = { ...currentStems };
+
+  if (pendingStems.length > 0) {
+    const polls = await Promise.all(
+      pendingStems.map(async (stem) => {
+        const predId = stemPredictions[stem];
+        try {
+          const res = await fetch(`https://api.replicate.com/v1/predictions/${predId}`, {
+            headers: { Authorization: `Token ${apiToken}` },
+          });
+          if (!res.ok) return null;
+          const pred = await res.json();
+          if (pred.status === "succeeded" && pred.output) {
+            const url = Array.isArray(pred.output) ? pred.output[0] : pred.output;
+            return { stem, url };
+          }
+        } catch { /* ignore */ }
+        return null;
+      })
+    );
+
+    const newlyDone = polls.filter(Boolean) as { stem: string; url: string }[];
+    if (newlyDone.length > 0) {
+      for (const { stem, url } of newlyDone) updatedStems[stem] = url;
+      const allDone = allStemIds.every((s) => updatedStems[s]);
+      await prisma.generation.update({
+        where: { id },
+        data: { stems: updatedStems, status: allDone ? "completed" : "processing" },
+      });
+      if (allDone) {
+        return NextResponse.json({ ...generation, stems: updatedStems, status: "completed" });
+      }
+    }
+  }
+
   const startedCount = Object.keys(stemPredictions).length;
-  const completedCount = Object.keys(currentStems).length;
+  const completedCount = Object.keys(updatedStems).length;
   const totalStems = allStemIds.length;
 
-  // Build per-stem status from what we know: completed=succeeded, started=processing, else queued
   const stemStatuses = Object.fromEntries(
     allStemIds.map((stem) => {
-      if (currentStems[stem]) return [stem, "succeeded"];
+      if (updatedStems[stem]) return [stem, "succeeded"];
       if (stemPredictions[stem]) return [stem, "processing"];
       return [stem, "queued"];
     })
@@ -73,6 +109,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
 
   return NextResponse.json({
     ...generation,
+    stems: updatedStems,
     stemProgress: { completed: completedCount, total: totalStems, started: startedCount },
     stemStatuses,
   });
