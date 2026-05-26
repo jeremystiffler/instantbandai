@@ -7,7 +7,11 @@
  */
 
 export const MUSICGEN_VERSION =
-  "b05b1dff1d8c6dc63d14b0cdb42135378dcb87f6373b0d3d341ede46e59e2b38";
+  "b05b1dff1d8c6dc63d14b0cdb42135378dcb87f6373b0d3d341ede46e59e2b38"; // legacy ref
+
+// musicgen-chord: follows chord progressions + BPM locked
+export const MUSICGEN_CHORD_VERSION =
+  "c940ab4308578237484f90f010b2b3871bf64008e95f26f4d567529ad019a3d6";
 
 export const DEMUCS_VERSION =
   "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
@@ -154,57 +158,61 @@ const STEM_PROMPTS: Record<string, string> = {
 
 export interface MusicGenInput {
   prompt: string;
-  input_audio?: string;       // only used for melody-large; omitted for stereo-large
+  audio_chords: string;       // source audio — model extracts chords internally via BTC
+  bpm: number;                // hard BPM lock (not a prompt hint)
+  time_sig: string;
   duration: number;
+  chroma_coefficient: number; // how strictly to follow chords (0.5–2.5)
   continuation: boolean;
-  continuation_start: number;
   temperature: number;
   classifier_free_guidance: number;
   top_k: number;
-  model_version: string;
   output_format: "wav" | "mp3";
   normalization_strategy: "loudness";
 }
 
 /**
- * Build MusicGen input for a given stem + slider value.
- *
- * Strategy: use stereo-large (text-only) — melody-large uses the full mix
- * as its melody guide which causes atonal noise when a full song is the source.
- * stereo-large with strong CFG + lower temp produces clean, musical instrument stems.
+ * Build musicgen-chord input.
+ * Uses sakemin/musicgen-chord which:
+ *  - Extracts chord progression from audio_chords via BTC model
+ *  - Locks generation to the provided BPM (numeric, not a hint)
+ *  - Follows chord progression strictly (chroma_coefficient controls tightness)
  */
 export function buildMusicGenInput(
   stem: string,
   slider: number,
-  _sourceUrl: string,   // kept for API compat; not sent to model (text-only mode)
+  sourceUrl: string,
   bpm?: number | null,
   key?: string | null,
   duration = 30
 ): MusicGenInput {
   const s = Math.max(0, Math.min(100, slider));
 
-  // Lower temperature = more coherent / musical output
-  // temperature: 0.6 (mirror) → 1.0 (original)
-  const temperature = 0.6 + (s / 100) * 0.4;
-  // CFG: 7 (high guidance) → 4 (more creative) — high CFG keeps it on-prompt and tonal
-  const cfg = Math.round(7 - (s / 100) * 3);
+  // temperature: 0.8 (tight/mirror) → 1.1 (more original)
+  const temperature = 0.8 + (s / 100) * 0.3;
+  // CFG: 4 (tight) → 3 (creative)
+  const cfg = s < 50 ? 4 : 3;
+  // chroma_coefficient: how strictly to follow the chord progression
+  // slider=0 (mirror) → 1.8 (very tight), slider=100 (original) → 0.8 (looser)
+  const chromaCoeff = parseFloat((1.8 - (s / 100) * 1.0).toFixed(2));
 
-  const keyStr = key ? ` in the key of ${key}` : "";
-  const bpmStr = bpm ? ` at ${Math.round(bpm)} BPM` : "";
-  const styleStr = s < 33 ? ", subtle and supportive, low in the mix" :
-                   s < 66 ? ", balanced melodic presence" :
-                             ", expressive and prominent";
-  const prompt = `${STEM_PROMPTS[stem]}${keyStr}${bpmStr}${styleStr}, high quality, professional studio recording`;
+  const keyStr = key ? `, key of ${key}` : "";
+  const styleStr = s < 33 ? ", subtle and supportive, low in the mix"
+                 : s < 66 ? ", balanced melodic presence"
+                 :           ", expressive and prominent";
+  const prompt = `${STEM_PROMPTS[stem]}${keyStr}${styleStr}, high quality professional studio recording`;
 
   return {
     prompt,
+    audio_chords: sourceUrl,
+    bpm: bpm ? Math.round(bpm) : 120,
+    time_sig: "4/4",
     duration,
+    chroma_coefficient: chromaCoeff,
     continuation: false,
-    continuation_start: 0,
     temperature,
     classifier_free_guidance: cfg,
     top_k: 250,
-    model_version: "stereo-large",
     output_format: "wav",
     normalization_strategy: "loudness",
   };
@@ -217,7 +225,7 @@ export async function startMusicGenPrediction(
   apiToken: string,
   webhookUrl?: string
 ): Promise<string> {
-  const body: Record<string, unknown> = { version: MUSICGEN_VERSION, input };
+  const body: Record<string, unknown> = { version: MUSICGEN_CHORD_VERSION, input };
   if (webhookUrl) {
     body.webhook = webhookUrl;
     body.webhook_events_filter = ["completed"];
