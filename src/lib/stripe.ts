@@ -3,9 +3,20 @@ const StripeLib = require("stripe");
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const StripeConstructor = StripeLib.default ?? StripeLib;
 
+// Lazy singleton — avoids build-time crash when STRIPE_SECRET_KEY is absent
+let _stripe: ReturnType<typeof StripeConstructor> | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const stripe = new StripeConstructor(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2025-04-30.basil",
+export function getStripe(): any {
+  if (!_stripe) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) throw new Error("STRIPE_SECRET_KEY is not set");
+    _stripe = new StripeConstructor(key, { apiVersion: "2025-04-30.basil" });
+  }
+  return _stripe;
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const stripe: any = new Proxy({} as any, {
+  get(_t, prop) { return getStripe()[prop]; },
 });
 
 export const PLANS = {

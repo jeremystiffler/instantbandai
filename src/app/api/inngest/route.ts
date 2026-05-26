@@ -1,6 +1,4 @@
-import { serve } from "inngest/next";
-import { inngest } from "@/lib/inngest";
-import { generateStems } from "@/inngest/generate-stems";
-
-export const dynamic = 'force-dynamic';
-export const { GET, POST, PUT } = serve({ client: inngest, functions: [generateStems] });
+// Inngest removed — using direct Replicate polling instead
+import { NextResponse } from "next/server";
+export async function GET() { return NextResponse.json({ ok: true }); }
+export async function POST() { return NextResponse.json({ ok: true }); }
