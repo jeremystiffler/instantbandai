@@ -18,6 +18,15 @@ export async function getUploadUrl(key: string, contentType: string) {
   }), { expiresIn: 300 });
 }
 
+export async function uploadBuffer(key: string, buffer: Buffer, contentType: string) {
+  await s3.send(new PutObjectCommand({
+    Bucket: process.env.R2_BUCKET!,
+    Key: key,
+    Body: buffer,
+    ContentType: contentType,
+  }));
+}
+
 export function getPublicUrl(key: string) {
   return `${process.env.R2_PUBLIC_URL}/${key}`;
 }
