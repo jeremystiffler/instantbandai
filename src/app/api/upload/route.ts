@@ -1,9 +1,10 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { uploadBuffer } from "@/lib/r2";
+import { uploadBuffer, getPublicUrl } from "@/lib/r2";
 import { NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -18,7 +19,8 @@ export async function POST(req: Request) {
     const buffer = Buffer.from(bytes);
     const key = `uploads/${crypto.randomUUID()}-${file.name}`;
     await uploadBuffer(key, buffer, file.type || "audio/webm");
-    return NextResponse.json({ key });
+    const publicUrl = getPublicUrl(key);
+    return NextResponse.json({ key, publicUrl });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Upload failed";
     console.error("Upload error:", msg);

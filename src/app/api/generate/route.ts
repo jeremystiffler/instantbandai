@@ -12,11 +12,12 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { key, prompt } = await req.json();
+  const { key, sourceUrl: providedSourceUrl, prompt } = await req.json();
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
   if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-  const sourceUrl = getPublicUrl(key);
+  // Accept either a pre-resolved publicUrl or derive it from key
+  const sourceUrl = providedSourceUrl ?? getPublicUrl(key);
 
   // Start Replicate prediction
   const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {

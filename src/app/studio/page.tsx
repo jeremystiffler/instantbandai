@@ -75,6 +75,14 @@ export default function StudioPage() {
     if (!file) return;
     setLoading(true);
     setError("");
+
+    // Vercel Hobby plan hard limit — warn early
+    if (file.size > 4 * 1024 * 1024) {
+      setError("File too large. Please use an MP3 under 4MB or trim your audio first. (Tip: a 30-second MP3 is ~500KB)");
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoadingMsg("Uploading audio…");
       const formData = new FormData();
@@ -87,13 +95,13 @@ export default function StudioPage() {
         const err = await uploadRes.json().catch(() => ({}));
         throw new Error(err.error || `Upload failed (${uploadRes.status})`);
       }
-      const { key } = await uploadRes.json();
+      const { key, publicUrl } = await uploadRes.json();
 
       setLoadingMsg("Starting stem generation…");
       const genRes = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key, prompt }),
+        body: JSON.stringify({ key, sourceUrl: publicUrl, prompt }),
       });
       if (!genRes.ok) {
         const err = await genRes.json().catch(() => ({}));
