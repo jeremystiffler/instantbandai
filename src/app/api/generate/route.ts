@@ -7,7 +7,7 @@ import {
   DEMUCS_VERSION,
   GENERATE_STEMS,
   buildMusicGenInput,
-  startMusicGenPrediction,
+  startAllStemPredictions,
   type GenerateStem,
 } from "@/lib/musicgen";
 
@@ -75,27 +75,15 @@ export async function POST(req: Request) {
   }
 
   // ─── GENERATE MODE (MusicGen per-stem) ─────────────────────────────────────
-  // Fire all stem predictions in parallel (base + extra)
+  // Fire stems sequentially with 2.5s stagger to avoid Replicate 429 rate limits.
+  // Each stem runs in parallel on Replicate's GPU once started — stagger only affects start time.
   const allStemIds = [...GENERATE_STEMS, ...((extraStems as string[]) ?? [])];
-  const stemEntries = await Promise.all(
-    allStemIds.map(async (stem) => {
-      const slider: number = sliders[stem] ?? 0;
-      const input = buildMusicGenInput(stem as GenerateStem, slider, sourceUrl, bpm, musicKey, duration);
-      try {
-        const predId = await startMusicGenPrediction(input, apiToken);
-        return [stem, predId] as const;
-      } catch (e) {
-        console.error(`MusicGen start failed for ${stem}:`, e);
-        return [stem, null] as const;
-      }
-    })
-  );
+  const webhookUrl = process.env.NEXTAUTH_URL
+    ? `${process.env.NEXTAUTH_URL}/api/webhook/replicate`
+    : undefined;
 
-  const stemPredictions = Object.fromEntries(stemEntries.filter(([, id]) => id !== null));
-  const normalizedSliders = Object.fromEntries(
-    allStemIds.map((s) => [s, sliders[s] ?? 0])
-  );
-
+  // Create the generation record first so webhook can reference it
+  const normalizedSliders = Object.fromEntries(allStemIds.map((s) => [s, sliders[s as GenerateStem] ?? 0]));
   const generation = await prisma.generation.create({
     data: {
       userId: user.id,
@@ -105,10 +93,33 @@ export async function POST(req: Request) {
       bpm: bpm ?? null,
       key: musicKey ?? null,
       stemSliders: normalizedSliders,
-      stemPredictions,
+      stemPredictions: {},
       extraStems: (extraStems as string[])?.length ? extraStems : undefined,
     },
   });
+
+  // Start predictions staggered (non-blocking — we return the generation ID immediately)
+  // Use void to fire-and-forget; Vercel function stays alive long enough for all starts
+  (async () => {
+    const stemPredictions = await startAllStemPredictions(
+      allStemIds,
+      (stem) => buildMusicGenInput(stem as GenerateStem, sliders[stem] ?? 0, sourceUrl, bpm, musicKey, duration),
+      apiToken,
+      webhookUrl,
+      2500
+    );
+    if (Object.keys(stemPredictions).length > 0) {
+      await prisma.generation.update({
+        where: { id: generation.id },
+        data: { stemPredictions },
+      });
+    } else {
+      await prisma.generation.update({
+        where: { id: generation.id },
+        data: { status: "failed" },
+      });
+    }
+  })();
 
   return NextResponse.json({ id: generation.id });
 }

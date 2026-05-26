@@ -12,7 +12,7 @@ export const MUSICGEN_VERSION =
 export const DEMUCS_VERSION =
   "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
 
-export const GENERATE_STEMS = ["drums", "bass", "guitar", "keys", "strings", "other"] as const;
+export const GENERATE_STEMS = ["drums", "bass", "guitar", "keys", "strings"] as const;
 export const SEPARATE_STEMS = ["vocals", "bass", "drums", "guitar", "piano", "other"] as const;
 
 export type GenerateStem = (typeof GENERATE_STEMS)[number];
@@ -213,23 +213,64 @@ export function buildMusicGenInput(
   };
 }
 
-/** Fire a single MusicGen prediction on Replicate, return prediction ID */
+/** Fire a single MusicGen prediction on Replicate, return prediction ID.
+ *  Retries once on 429 after a 12-second backoff. */
 export async function startMusicGenPrediction(
   input: MusicGenInput,
-  apiToken: string
+  apiToken: string,
+  webhookUrl?: string
 ): Promise<string> {
-  const res = await fetch("https://api.replicate.com/v1/predictions", {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${apiToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ version: MUSICGEN_VERSION, input }),
-  });
+  const body: Record<string, unknown> = { version: MUSICGEN_VERSION, input };
+  if (webhookUrl) {
+    body.webhook = webhookUrl;
+    body.webhook_events_filter = ["completed"];
+  }
+
+  async function attempt(): Promise<Response> {
+    return fetch("https://api.replicate.com/v1/predictions", {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${apiToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  let res = await attempt();
+  if (res.status === 429) {
+    // Rate limited — wait 12s and try once more
+    await new Promise((r) => setTimeout(r, 12_000));
+    res = await attempt();
+  }
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`Replicate error: ${JSON.stringify(err)}`);
+    throw new Error(`Replicate error ${res.status}: ${JSON.stringify(err)}`);
   }
   const prediction = await res.json();
   return prediction.id as string;
+}
+
+/** Fire all stems sequentially with a stagger gap to avoid rate-limit 429s.
+ *  Returns map of stemId → prediction ID (nulls filtered out). */
+export async function startAllStemPredictions(
+  stems: string[],
+  buildInput: (stem: string) => MusicGenInput,
+  apiToken: string,
+  webhookUrl?: string,
+  staggerMs = 2500
+): Promise<Record<string, string>> {
+  const results: Record<string, string> = {};
+  for (let i = 0; i < stems.length; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, staggerMs));
+    const stem = stems[i];
+    try {
+      const predId = await startMusicGenPrediction(buildInput(stem), apiToken, webhookUrl);
+      results[stem] = predId;
+    } catch (e) {
+      console.error(`MusicGen start failed for ${stem}:`, e);
+    }
+  }
+  return results;
 }
