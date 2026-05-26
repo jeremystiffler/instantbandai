@@ -181,7 +181,7 @@ export function buildMusicGenInput(
   sourceUrl: string,
   bpm?: number | null,
   key?: string | null,
-    duration = 15
+    duration = 30
 ): MusicGenInput {
   const s = Math.max(0, Math.min(100, slider));
 
@@ -190,8 +190,9 @@ export function buildMusicGenInput(
   const temperature = 0.7 + (s / 100) * 0.6;
   // CFG: 5 (mirror) → 2 (original)
   const cfg = Math.round(5 - (s / 100) * 3);
-  // continuation mode only at slider < 25
-  const continuation = s < 25;
+  // continuation mode only at slider < 25, but ONLY when source audio is short
+  // For safety always disable continuation to avoid "prompt longer than audio" errors
+  const continuation = false;
 
   const keyStr = key ? ` in the key of ${key}` : "";
   const bpmStr = bpm ? ` at ${Math.round(bpm)} BPM` : "";

@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     extraStems = [],   // ["percussion", "acoustic-guitar"] — extra instruments
     bpm,
     musicKey,
-    duration = 15,
+    duration = 30,
   } = await req.json();
 
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
