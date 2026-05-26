@@ -36,6 +36,7 @@ export default function StudioPage() {
   const [mode, setMode] = useState<"separate" | "generate">("generate");
   const [sliders, setSliders] = useState<Record<GenerateStem, number>>({ ...DEFAULT_SLIDERS });
   const [extraStems, setExtraStems] = useState<string[]>([]);
+  const [variantPickerOpen, setVariantPickerOpen] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -290,48 +291,70 @@ function sliderLabel(val: number) {
               </span>
             </div>
 
-            {/* Category buttons — click to add next available variant */}
+            {/* Category buttons — click expands variant picker */}
             <div className="flex flex-wrap gap-2 mb-3">
               {EXTRA_INSTRUMENT_OPTIONS.map((inst) => {
-                // Count how many of this instrument are already added
-                const addedCount = extraStems.filter(s => s.startsWith(inst.id + "-")).length;
-                const maxVariants = inst.variants.length;
-                const allVariantsUsed = addedCount >= maxVariants;
-                const atSlotLimit = extraStems.length >= 4 && addedCount === 0;
-                const disabled = allVariantsUsed || atSlotLimit;
+                const addedVariants = extraStems.filter(s => s.startsWith(inst.id + "-"));
+                const allVariantsUsed = addedVariants.length >= inst.variants.length;
+                const atSlotLimit = extraStems.length >= 4;
+                const isOpen = variantPickerOpen === inst.id;
                 return (
-                  <button
-                    key={inst.id}
-                    disabled={disabled}
-                    onClick={() => {
-                      if (disabled) return;
-                      // Pick the next variant not yet added
-                      const usedSuffixes = extraStems
-                        .filter(s => s.startsWith(inst.id + "-"))
-                        .map(s => s.slice(inst.id.length + 1));
-                      const nextVariant = inst.variants.find(v => !usedSuffixes.includes(v.suffix));
-                      if (!nextVariant) return;
-                      const variantId = `${inst.id}-${nextVariant.suffix}`;
-                      setExtraStems(prev => [...prev, variantId]);
-                    }}
-                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
-                      allVariantsUsed
-                        ? "bg-violet-900/30 border-violet-500/40 text-violet-300 cursor-not-allowed"
-                        : atSlotLimit
-                        ? "bg-white/5 border-white/10 text-white/20 cursor-not-allowed"
-                        : addedCount > 0
-                        ? "bg-violet-600/30 border-violet-500 text-violet-200 hover:bg-violet-600/50"
-                        : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white"
-                    }`}
-                  >
-                    {inst.label}
-                    {addedCount > 0 && !allVariantsUsed && (
-                      <span className="ml-1 opacity-60">+</span>
+                  <div key={inst.id} className="relative">
+                    <button
+                      disabled={allVariantsUsed || (atSlotLimit && addedVariants.length === 0)}
+                      onClick={() => setVariantPickerOpen(isOpen ? null : inst.id)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
+                        allVariantsUsed
+                          ? "bg-violet-900/30 border-violet-500/40 text-violet-300 cursor-not-allowed"
+                          : (atSlotLimit && addedVariants.length === 0)
+                          ? "bg-white/5 border-white/10 text-white/20 cursor-not-allowed"
+                          : isOpen
+                          ? "bg-violet-600 border-violet-400 text-white"
+                          : addedVariants.length > 0
+                          ? "bg-violet-600/30 border-violet-500 text-violet-200 hover:bg-violet-600/50"
+                          : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      {inst.label}
+                      {addedVariants.length > 0 && !allVariantsUsed && <span className="ml-1 opacity-60">▾</span>}
+                      {allVariantsUsed && <span className="ml-1 opacity-50">✓</span>}
+                      {!allVariantsUsed && addedVariants.length === 0 && <span className="ml-1 opacity-40">▾</span>}
+                    </button>
+                    {/* Variant dropdown */}
+                    {isOpen && (
+                      <div className="absolute left-0 top-full mt-1 z-50 bg-gray-900 border border-white/15 rounded-xl shadow-xl overflow-hidden min-w-[220px]">
+                        <div className="px-3 py-2 border-b border-white/10">
+                          <span className="text-xs text-white/40 uppercase tracking-wider">Choose style</span>
+                        </div>
+                        {inst.variants.map((v) => {
+                          const variantId = `${inst.id}-${v.suffix}`;
+                          const alreadyAdded = extraStems.includes(variantId);
+                          const wouldExceedSlots = extraStems.length >= 4 && !alreadyAdded;
+                          return (
+                            <button
+                              key={v.suffix}
+                              disabled={alreadyAdded || wouldExceedSlots}
+                              onClick={() => {
+                                if (alreadyAdded || wouldExceedSlots) return;
+                                setExtraStems(prev => [...prev, variantId]);
+                                setVariantPickerOpen(null);
+                              }}
+                              className={`w-full text-left px-4 py-2.5 text-sm transition flex items-center justify-between ${
+                                alreadyAdded
+                                  ? "text-violet-400 bg-violet-900/30 cursor-default"
+                                  : wouldExceedSlots
+                                  ? "text-white/20 cursor-not-allowed"
+                                  : "text-white/80 hover:bg-white/10 hover:text-white"
+                              }`}
+                            >
+                              <span>{v.label.split("(")[1]?.replace(")", "") ?? v.label}</span>
+                              {alreadyAdded && <span className="text-xs text-violet-400 ml-2">Added ✓</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
                     )}
-                    {allVariantsUsed && (
-                      <span className="ml-1 opacity-50">✓</span>
-                    )}
-                  </button>
+                  </div>
                 );
               })}
             </div>

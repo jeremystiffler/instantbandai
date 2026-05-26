@@ -49,9 +49,16 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   const stemPredictions = (generation.stemPredictions ?? {}) as Record<string, string>;
   const currentStems = (generation.stems ?? {}) as Record<string, string>;
 
+  // Determine full list of stems to poll (base + extras)
+  const extraStemsRaw = (generation as Record<string, unknown>).extraStems;
+  const extraStems: string[] = extraStemsRaw
+    ? (typeof extraStemsRaw === "string" ? JSON.parse(extraStemsRaw) : (extraStemsRaw as string[]))
+    : [];
+  const allStemIds = [...GENERATE_STEMS, ...extraStems] as string[];
+
   // Poll all still-running stems in parallel
   const polls = await Promise.all(
-    GENERATE_STEMS.map(async (stem) => {
+    allStemIds.map(async (stem) => {
       const predId = stemPredictions[stem];
       // Already completed or no prediction ID
       if (!predId || currentStems[stem]) return { stem, url: currentStems[stem] ?? null, status: "done" };
@@ -63,7 +70,9 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
       const p = await res.json();
 
       if (p.status === "succeeded" && p.output) {
-        return { stem, url: p.output as string, status: "succeeded" };
+        // MusicGen returns output as string[] — grab first element
+        const url = Array.isArray(p.output) ? p.output[0] : p.output as string;
+        return { stem, url, status: "succeeded" };
       }
       if (["failed", "canceled"].includes(p.status)) {
         return { stem, url: null, status: "failed" };
@@ -76,18 +85,12 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   const newStems = { ...currentStems };
   let anyNew = false;
   for (const { stem, url, status } of polls) {
-    if (status === "succeeded" && url) {
+    if ((status === "succeeded" || status === "done") && url) {
       newStems[stem] = url;
-      anyNew = true;
+      if (status === "succeeded") anyNew = true;
     }
   }
 
-  // Determine overall status
-  const extraStemsRaw = (generation as Record<string, unknown>).extraStems;
-  const extraStems: string[] = extraStemsRaw
-    ? (typeof extraStemsRaw === "string" ? JSON.parse(extraStemsRaw) : (extraStemsRaw as string[]))
-    : [];
-  const allStemIds = [...GENERATE_STEMS, ...extraStems] as string[];
   const totalStems = allStemIds.length;
   const completedCount = Object.keys(newStems).length;
   const anyFailed = polls.some((p) => p.status === "failed");
