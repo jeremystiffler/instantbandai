@@ -46,83 +46,25 @@ export default function StudioPage() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const router = useRouter();
 
-  // ── BPM detection via onset strength + autocorrelation (librosa-style) ─────
+  // ── BPM detection via music-tempo (ACF beat tracker, ~200ms) ──────────────
   const analyzeFile = useCallback(async (f: File) => {
     if (mode !== "generate") return;
     setAnalyzing(true);
     setDetectedBpm(null);
     try {
-      const ctx = new AudioContext({ sampleRate: 22050 }); // downsample to 22kHz
+      const ctx = new AudioContext();
       const arrayBuf = await f.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(arrayBuf);
+      // Mix down to mono
       const data = audioBuf.getChannelData(0);
-      const sr = audioBuf.sampleRate; // will be 22050
-
-      // ── Step 1: Compute spectral flux onset strength envelope ──────────────
-      // Use hop size of 512 samples (~23ms at 22kHz) — standard in beat tracking
-      const hopSize = 512;
-      const fftSize = 2048;
-      const halfFFT = fftSize / 2;
-      const numFrames = Math.floor((data.length - fftSize) / hopSize);
-      const onset = new Float32Array(numFrames);
-
-      // Pre-compute Hann window
-      const hann = new Float32Array(fftSize);
-      for (let i = 0; i < fftSize; i++) hann[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / fftSize));
-
-      let prevMag = new Float32Array(halfFFT);
-      for (let frame = 0; frame < numFrames; frame++) {
-        const start = frame * hopSize;
-        // Windowed FFT via Goertzel for magnitude spectrum
-        const mag = new Float32Array(halfFFT);
-        // Use AnalyserNode trick: create OfflineAudioContext per chunk is too slow.
-        // Instead do a fast magnitude approx using sub-sampled DFT (N=512 points is fine for onset)
-        const dftN = 512;
-        for (let k = 0; k < halfFFT; k += Math.ceil(halfFFT / dftN)) {
-          let re = 0, im = 0;
-          for (let n = 0; n < fftSize; n++) {
-            const a = 2 * Math.PI * k * n / fftSize;
-            const s = data[start + n] * hann[n];
-            re += s * Math.cos(a);
-            im -= s * Math.sin(a);
-          }
-          mag[k] = Math.sqrt(re * re + im * im);
-        }
-        // Spectral flux: sum of positive magnitude differences
-        let flux = 0;
-        for (let k = 0; k < halfFFT; k++) {
-          const diff = mag[k] - prevMag[k];
-          if (diff > 0) flux += diff;
-        }
-        onset[frame] = flux;
-        prevMag = mag;
-      }
-
-      // ── Step 2: Autocorrelate onset envelope to find beat period ──────────
-      // BPM range 60–200 → period in frames
-      const minPeriod = Math.floor((60 / 200) * sr / hopSize);
-      const maxPeriod = Math.floor((60 / 60) * sr / hopSize);
-      let bestCorr = -Infinity;
-      let bestPeriod = minPeriod;
-
-      for (let period = minPeriod; period <= maxPeriod; period++) {
-        let corr = 0;
-        const n = onset.length - period;
-        for (let i = 0; i < n; i++) corr += onset[i] * onset[i + period];
-        // Normalize by auto-power at lag 0 to avoid bias toward long periods
-        if (corr > bestCorr) { bestCorr = corr; bestPeriod = period; }
-      }
-
-      // Convert period (frames) → BPM, then snap to integer
-      const rawBpm = (60 * sr) / (bestPeriod * hopSize);
-
-      // Halve/double into 60–180 range
-      let bpm = rawBpm;
+      // music-tempo: ACF-based beat tracker, very fast
+      const { default: MusicTempo } = await import("music-tempo");
+      const mt = new MusicTempo(data, { sampleRate: audioBuf.sampleRate });
+      let bpm = mt.tempo;
+      // Octave-correct into 60–180 range
       while (bpm > 180) bpm /= 2;
       while (bpm < 60) bpm *= 2;
-      bpm = Math.round(bpm);
-
-      setDetectedBpm(bpm);
+      setDetectedBpm(Math.round(bpm));
       await ctx.close();
     } catch (e) {
       console.error("BPM detection error", e);
