@@ -2,7 +2,10 @@
 import { useSession, signIn } from "next-auth/react";
 import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { uploadFiles } from "uploadthing/client";
+import { genUploader } from "uploadthing/client";
+
+const { uploadFiles } = genUploader({ url: "/api/uploadthing" });
+
 
 export default function StudioPage() {
   const { data: session, status } = useSession();
