@@ -4,6 +4,8 @@ import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { genUploader } from "uploadthing/client";
 import { EXTRA_INSTRUMENT_OPTIONS, VARIANT_LABELS } from "@/lib/musicgen";
+// Pre-import music-tempo so it's ready when the user drops a file
+import MusicTempo from "music-tempo";
 
 const { uploadFiles } = genUploader({ url: "/api/uploadthing" });
 
@@ -58,7 +60,6 @@ export default function StudioPage() {
       // Mix down to mono
       const data = audioBuf.getChannelData(0);
       // music-tempo: ACF-based beat tracker, very fast
-      const { default: MusicTempo } = await import("music-tempo");
       const mt = new MusicTempo(data, { sampleRate: audioBuf.sampleRate });
       let bpm = mt.tempo;
       // Octave-correct into 60–180 range
@@ -223,7 +224,7 @@ function sliderLabel(val: number) {
 
       {/* Drop Zone */}
       <div
-        onClick={() => !recording && inputRef.current?.click()}
+        onClick={() => !recording && !file && inputRef.current?.click()}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
