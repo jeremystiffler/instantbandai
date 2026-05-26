@@ -8,15 +8,19 @@ datasource db {
 }
 
 model User {
-  id            String       @id @default(cuid())
-  email         String       @unique
-  name          String?
-  image         String?
-  emailVerified DateTime?
-  accounts      Account[]
-  sessions      Session[]
-  generations   Generation[]
-  createdAt     DateTime     @default(now())
+  id               String       @id @default(cuid())
+  email            String       @unique
+  name             String?
+  image            String?
+  emailVerified    DateTime?
+  accounts         Account[]
+  sessions         Session[]
+  generations      Generation[]
+  createdAt        DateTime     @default(now())
+  stripeCustomerId String?      @unique
+  credits          Int          @default(0)
+  plan             String       @default("free") // free | creator | pro
+  planExpiresAt    DateTime?
 }
 
 model Account {
