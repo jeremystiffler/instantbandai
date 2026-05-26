@@ -3,6 +3,7 @@ import { useSession, signIn } from "next-auth/react";
 import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { genUploader } from "uploadthing/client";
+import { EXTRA_INSTRUMENT_OPTIONS, VARIANT_LABELS } from "@/lib/musicgen";
 
 const { uploadFiles } = genUploader({ url: "/api/uploadthing" });
 
@@ -34,6 +35,7 @@ export default function StudioPage() {
   const [recordingTime, setRecordingTime] = useState(0);
   const [mode, setMode] = useState<"separate" | "generate">("generate");
   const [sliders, setSliders] = useState<Record<GenerateStem, number>>({ ...DEFAULT_SLIDERS });
+  const [extraStems, setExtraStems] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -80,13 +82,13 @@ export default function StudioPage() {
     if (timerRef.current) clearInterval(timerRef.current);
   }
 
-  function sliderLabel(val: number) {
-    if (val <= 15) return "Mirror";
-    if (val <= 40) return "Close";
-    if (val <= 65) return "Blend";
-    if (val <= 85) return "Inspired";
-    return "Original";
-  }
+function sliderLabel(val: number) {
+  if (val <= 15) return "Original";
+  if (val <= 40) return "Close";
+  if (val <= 65) return "Blend";
+  if (val <= 85) return "Inspired";
+  return "Creative";
+}
 
   async function handleGenerate() {
     if (!file) return;
@@ -107,6 +109,7 @@ export default function StudioPage() {
           sourceUrl: publicUrl,
           mode,
           sliders: mode === "generate" ? sliders : undefined,
+          extraStems: mode === "generate" ? extraStems : undefined,
           prompt,
         }),
       });
@@ -161,7 +164,7 @@ export default function StudioPage() {
               : "text-white/50 hover:text-white/80"
           }`}
         >
-          ✂️ Separate Stems
+          ✂️ Track Separation
         </button>
       </div>
 
@@ -272,8 +275,98 @@ export default function StudioPage() {
             </div>
           ))}
           <div className="flex justify-between text-xs text-white/20 mt-1 px-[7.5rem]">
-            <span>← Mirror structure</span>
-            <span>Original →</span>
+            <span>← Stays true to source</span>
+            <span>Fully original →</span>
+          </div>
+
+          {/* ── Add Instruments ────────────────────────────────── */}
+          <div className="mt-6 border-t border-white/10 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wider">
+                Add Instruments
+              </h3>
+              <span className="text-xs text-white/30">
+                {extraStems.length}/4 slots · {extraStems.length < 2 ? "free" : "Creator/Pro"}
+              </span>
+            </div>
+
+            {/* Category buttons — click to add next available variant */}
+            <div className="flex flex-wrap gap-2 mb-3">
+              {EXTRA_INSTRUMENT_OPTIONS.map((inst) => {
+                // Count how many of this instrument are already added
+                const addedCount = extraStems.filter(s => s.startsWith(inst.id + "-")).length;
+                const maxVariants = inst.variants.length;
+                const allVariantsUsed = addedCount >= maxVariants;
+                const atSlotLimit = extraStems.length >= 4 && addedCount === 0;
+                const disabled = allVariantsUsed || atSlotLimit;
+                return (
+                  <button
+                    key={inst.id}
+                    disabled={disabled}
+                    onClick={() => {
+                      if (disabled) return;
+                      // Pick the next variant not yet added
+                      const usedSuffixes = extraStems
+                        .filter(s => s.startsWith(inst.id + "-"))
+                        .map(s => s.slice(inst.id.length + 1));
+                      const nextVariant = inst.variants.find(v => !usedSuffixes.includes(v.suffix));
+                      if (!nextVariant) return;
+                      const variantId = `${inst.id}-${nextVariant.suffix}`;
+                      setExtraStems(prev => [...prev, variantId]);
+                    }}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
+                      allVariantsUsed
+                        ? "bg-violet-900/30 border-violet-500/40 text-violet-300 cursor-not-allowed"
+                        : atSlotLimit
+                        ? "bg-white/5 border-white/10 text-white/20 cursor-not-allowed"
+                        : addedCount > 0
+                        ? "bg-violet-600/30 border-violet-500 text-violet-200 hover:bg-violet-600/50"
+                        : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white"
+                    }`}
+                  >
+                    {inst.label}
+                    {addedCount > 0 && !allVariantsUsed && (
+                      <span className="ml-1 opacity-60">+</span>
+                    )}
+                    {allVariantsUsed && (
+                      <span className="ml-1 opacity-50">✓</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Added variant chips — each removable */}
+            {extraStems.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                {extraStems.map((variantId, i) => {
+                  const label = VARIANT_LABELS[variantId] ?? variantId;
+                  const isPaid = i >= 1; // first is free, 2-4 require Creator/Pro
+                  return (
+                    <div key={variantId} className="flex items-center justify-between bg-white/5 border border-white/10 rounded-lg px-3 py-1.5">
+                      <span className="text-sm text-white/80">{label}</span>
+                      <div className="flex items-center gap-2">
+                        {isPaid && (
+                          <span className="text-[10px] bg-violet-700/60 text-violet-200 px-1.5 py-0.5 rounded-full">Creator+</span>
+                        )}
+                        <button
+                          onClick={() => setExtraStems(prev => prev.filter(s => s !== variantId))}
+                          className="text-white/30 hover:text-white/70 text-xs transition"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                <p className="text-xs text-violet-400 mt-1">
+                  +{extraStems.length} track{extraStems.length > 1 ? "s" : ""} · ~{extraStems.length * 30}s extra render time
+                  {extraStems.length >= 2 && (
+                    <span className="ml-2 text-violet-300/60">· Creator/Pro plan required</span>
+                  )}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

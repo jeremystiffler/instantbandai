@@ -44,11 +44,11 @@ const STEM_LABELS: Record<GenerateStem, string> = {
 };
 
 function sliderLabel(val: number) {
-  if (val <= 15) return "Mirror";
+  if (val <= 15) return "Original";
   if (val <= 40) return "Close";
   if (val <= 65) return "Blend";
   if (val <= 85) return "Inspired";
-  return "Original";
+  return "Creative";
 }
 
 interface TrackState {
@@ -245,6 +245,7 @@ export default function MixPage() {
   const [generation, setGeneration] = useState<Generation | null>(null);
   const [loading, setLoading] = useState(true);
   const [pollingStatus, setPollingStatus] = useState<string>("");
+  const [stemProgress, setStemProgress] = useState<{ completed: number; total: number } | null>(null);
   const [stemSliders, setStemSliders] = useState<Record<GenerateStem, number>>({
     drums: 0, bass: 0, guitar: 0, keys: 0, strings: 0, other: 0,
   });
@@ -289,11 +290,15 @@ export default function MixPage() {
         const sl = typeof data.stemSliders === "string" ? JSON.parse(data.stemSliders) : data.stemSliders;
         setStemSliders(prev => ({ ...prev, ...sl }));
       }
-      buildTracks(stemObj, data.sourceUrl);
+      const extraArr = data.extraStems
+        ? (typeof data.extraStems === "string" ? JSON.parse(data.extraStems) : data.extraStems)
+        : [];
+      buildTracks(stemObj, data.sourceUrl, extraArr);
     } else if (data.status === "failed") {
       setLoading(false);
       setPollingStatus("Generation failed. Please try again.");
     } else {
+      if (data.stemProgress) setStemProgress(data.stemProgress);
       setPollingStatus(`Processing… ${data.status}`);
       setTimeout(fetchGeneration, 3000);
     }
@@ -305,15 +310,27 @@ export default function MixPage() {
   }, [authStatus, fetchGeneration]);
 
   // ── Build track list ─────────────────────────────────────────────────────
-  function buildTracks(stems: Stems, sourceUrl: string) {
+  function buildTracks(stems: Stems, sourceUrl: string, extraStemsArr: string[] = []) {
+    const EXTRA_COLORS = ["#f43f5e","#fb923c","#facc15","#34d399","#22d3ee","#a78bfa","#f472b6","#94a3b8","#c084fc","#4ade80"];
     const list: TrackState[] = [
       { id: "drums",    label: "Drums",    emoji: "🥁", color: "#ef4444", url: stems.drums    ?? null, volume: 80, muted: false, soloed: false },
       { id: "bass",     label: "Bass",     emoji: "🎸", color: "#f97316", url: stems.bass     ?? null, volume: 80, muted: false, soloed: false },
       { id: "guitar",   label: "Guitar",   emoji: "🎸", color: "#eab308", url: stems.guitar   ?? null, volume: 80, muted: false, soloed: false },
-      { id: "keys",     label: "Keys",     emoji: "🎹", color: "#22c55e", url: stems.keys ?? stems.piano ?? null, volume: 80, muted: false, soloed: false },
+      { id: "keys",     label: "Keys",     emoji: "🎹", color: "#22c55e", url: stems.keys ?? (stems as Record<string,string>).piano ?? null, volume: 80, muted: false, soloed: false },
       { id: "strings",  label: "Strings",  emoji: "🎻", color: "#06b6d4", url: stems.strings  ?? null, volume: 80, muted: false, soloed: false },
       { id: "vocals",   label: "Vocals",   emoji: "🎤", color: "#3b82f6", url: stems.vocals   ?? null, volume: 80, muted: false, soloed: false },
       { id: "other",    label: "Other",    emoji: "🎵", color: "#8b5cf6", url: stems.other    ?? null, volume: 80, muted: false, soloed: false },
+      // Extra instrument tracks
+      ...extraStemsArr.map((stemId, i) => ({
+        id: stemId,
+        label: stemId.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+        emoji: "🎼",
+        color: EXTRA_COLORS[i % EXTRA_COLORS.length],
+        url: (stems as Record<string, string | null>)[stemId] ?? null,
+        volume: 80,
+        muted: false,
+        soloed: false,
+      })),
       { id: "click",    label: "Click",    emoji: "🖱️", color: "#94a3b8", url: null, volume: 60, muted: false, soloed: false, isClick: true },
       { id: "original", label: "Original", emoji: "📁", color: "#64748b", url: sourceUrl, volume: 70, muted: false, soloed: false, isOriginal: true },
     ];
@@ -560,10 +577,30 @@ export default function MixPage() {
 
   // ── Loading / waiting state ───────────────────────────────────────────────
   if (authStatus === "loading" || loading) {
+    const pct = stemProgress && stemProgress.total > 0
+      ? Math.round((stemProgress.completed / stemProgress.total) * 100)
+      : null;
     return (
-      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-4">
+      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-6 px-6">
         <div className="w-16 h-16 border-4 border-purple-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-gray-400 text-lg">{pollingStatus || "Loading your mix…"}</p>
+        <p className="text-gray-400 text-lg text-center">
+          {pollingStatus || "Loading your mix…"}
+        </p>
+        {pct !== null && (
+          <div className="w-full max-w-sm">
+            <div className="flex justify-between text-xs text-white/40 mb-1">
+              <span>Composing stems…</span>
+              <span>{stemProgress!.completed} / {stemProgress!.total} done</span>
+            </div>
+            <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+              <div
+                className="h-full bg-violet-500 rounded-full transition-all duration-500"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <p className="text-center text-xs text-white/30 mt-2">{pct}% · AI is composing each track in parallel</p>
+          </div>
+        )}
       </div>
     );
   }

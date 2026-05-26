@@ -83,7 +83,12 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   }
 
   // Determine overall status
-  const totalStems = GENERATE_STEMS.length;
+  const extraStemsRaw = (generation as Record<string, unknown>).extraStems;
+  const extraStems: string[] = extraStemsRaw
+    ? (typeof extraStemsRaw === "string" ? JSON.parse(extraStemsRaw) : (extraStemsRaw as string[]))
+    : [];
+  const allStemIds = [...GENERATE_STEMS, ...extraStems] as string[];
+  const totalStems = allStemIds.length;
   const completedCount = Object.keys(newStems).length;
   const anyFailed = polls.some((p) => p.status === "failed");
   const allDone = completedCount >= totalStems;
@@ -94,8 +99,14 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
       where: { id },
       data: { stems: newStems, status: newStatus },
     });
-    return NextResponse.json(updated);
+    return NextResponse.json({
+      ...updated,
+      stemProgress: { completed: completedCount, total: totalStems },
+    });
   }
 
-  return NextResponse.json(generation);
+  return NextResponse.json({
+    ...generation,
+    stemProgress: { completed: completedCount, total: totalStems },
+  });
 }

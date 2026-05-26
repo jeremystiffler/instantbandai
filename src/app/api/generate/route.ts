@@ -23,6 +23,7 @@ export async function POST(req: Request) {
     sourceUrl: providedSourceUrl,
     mode = "separate", // "separate" | "generate"
     sliders = {},      // { drums:0, bass:0, ... } defaults to 0 per stem
+    extraStems = [],   // ["percussion", "acoustic-guitar"] — extra instruments
     bpm,
     musicKey,
     duration = 30,
@@ -74,9 +75,10 @@ export async function POST(req: Request) {
   }
 
   // ─── GENERATE MODE (MusicGen per-stem) ─────────────────────────────────────
-  // Fire all stem predictions in parallel
+  // Fire all stem predictions in parallel (base + extra)
+  const allStemIds = [...GENERATE_STEMS, ...((extraStems as string[]) ?? [])];
   const stemEntries = await Promise.all(
-    GENERATE_STEMS.map(async (stem) => {
+    allStemIds.map(async (stem) => {
       const slider: number = sliders[stem] ?? 0;
       const input = buildMusicGenInput(stem as GenerateStem, slider, sourceUrl, bpm, musicKey, duration);
       try {
@@ -91,7 +93,7 @@ export async function POST(req: Request) {
 
   const stemPredictions = Object.fromEntries(stemEntries.filter(([, id]) => id !== null));
   const normalizedSliders = Object.fromEntries(
-    GENERATE_STEMS.map((s) => [s, sliders[s] ?? 0])
+    allStemIds.map((s) => [s, sliders[s] ?? 0])
   );
 
   const generation = await prisma.generation.create({
@@ -104,6 +106,7 @@ export async function POST(req: Request) {
       key: musicKey ?? null,
       stemSliders: normalizedSliders,
       stemPredictions,
+      extraStems: (extraStems as string[])?.length ? extraStems : undefined,
     },
   });
 
