@@ -69,8 +69,11 @@ model Generation {
   user        User     @relation(fields: [userId], references: [id])
   bpm        Float?
   key        String?
-  chords     String?   // JSON string: [{time, chord, duration}]
-  stems      Json?// { vocals, bass, drums, guitar, piano, other }
+  chords     String?         // JSON string: [{time, chord, duration}]
+  stems      Json?           // { vocals, bass, drums, guitar, piano, other } — completed stem URLs
+  mode       String  @default("separate") // "separate" | "generate"
+  stemSliders     Json?      // { drums:0, bass:0, guitar:0, keys:0, strings:0, other:0 } 0=mirror..100=original
+  stemPredictions Json?      // { drums:"replId", bass:"replId", ... } — in-flight per-stem prediction IDs
 }
 
 

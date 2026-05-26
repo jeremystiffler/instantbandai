@@ -3,56 +3,107 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getPublicUrl } from "@/lib/r2";
 import { NextResponse } from "next/server";
+import {
+  DEMUCS_VERSION,
+  GENERATE_STEMS,
+  buildMusicGenInput,
+  startMusicGenPrediction,
+  type GenerateStem,
+} from "@/lib/musicgen";
 
-export const dynamic = 'force-dynamic';
-
-const REPLICATE_MODEL = "25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953"; // Demucs 6s
+export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session?.user?.email)
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { key, sourceUrl: providedSourceUrl } = await req.json();
+  const {
+    key,
+    sourceUrl: providedSourceUrl,
+    mode = "separate", // "separate" | "generate"
+    sliders = {},      // { drums:0, bass:0, ... } defaults to 0 per stem
+    bpm,
+    musicKey,
+    duration = 30,
+  } = await req.json();
+
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
   if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-  // Accept either a pre-resolved publicUrl or derive it from key
   const sourceUrl = providedSourceUrl ?? getPublicUrl(key);
+  const apiToken = process.env.REPLICATE_API_TOKEN!;
 
-  // Start Replicate prediction (Demucs stem separation)
-  const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      version: REPLICATE_MODEL,
-      input: {
-        audio: sourceUrl,
-        model_name: "htdemucs_6s",
-        output_format: "mp3",
+  // ─── SEPARATE MODE (Demucs) ─────────────────────────────────────────────────
+  if (mode === "separate") {
+    const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${apiToken}`,
+        "Content-Type": "application/json",
       },
-    }),
-  });
+      body: JSON.stringify({
+        version: DEMUCS_VERSION,
+        input: {
+          audio: sourceUrl,
+          model_name: "htdemucs_6s",
+          output_format: "mp3",
+        },
+      }),
+    });
 
-  if (!replicateRes.ok) {
-    const err = await replicateRes.json();
-    console.error("Replicate start error:", err);
-    return NextResponse.json({ error: "Failed to start stem separation" }, { status: 500 });
+    if (!replicateRes.ok) {
+      const err = await replicateRes.json().catch(() => ({}));
+      console.error("Replicate Demucs error:", err);
+      return NextResponse.json({ error: "Failed to start stem separation" }, { status: 500 });
+    }
+
+    const prediction = await replicateRes.json();
+    const generation = await prisma.generation.create({
+      data: {
+        userId: user.id,
+        sourceUrl,
+        status: "processing",
+        replicateId: prediction.id,
+        mode: "separate",
+        bpm: bpm ?? null,
+        key: musicKey ?? null,
+      },
+    });
+    return NextResponse.json({ id: generation.id });
   }
 
-  const prediction = await replicateRes.json();
+  // ─── GENERATE MODE (MusicGen per-stem) ─────────────────────────────────────
+  // Fire all stem predictions in parallel
+  const stemEntries = await Promise.all(
+    GENERATE_STEMS.map(async (stem) => {
+      const slider: number = sliders[stem] ?? 0;
+      const input = buildMusicGenInput(stem as GenerateStem, slider, sourceUrl, bpm, musicKey, duration);
+      try {
+        const predId = await startMusicGenPrediction(input, apiToken);
+        return [stem, predId] as const;
+      } catch (e) {
+        console.error(`MusicGen start failed for ${stem}:`, e);
+        return [stem, null] as const;
+      }
+    })
+  );
+
+  const stemPredictions = Object.fromEntries(stemEntries.filter(([, id]) => id !== null));
+  const normalizedSliders = Object.fromEntries(
+    GENERATE_STEMS.map((s) => [s, sliders[s] ?? 0])
+  );
 
   const generation = await prisma.generation.create({
     data: {
       userId: user.id,
       sourceUrl,
       status: "processing",
-      replicateId: prediction.id,
-      stems: undefined,
-      bpm: null,
-      key: null,
+      mode: "generate",
+      bpm: bpm ?? null,
+      key: musicKey ?? null,
+      stemSliders: normalizedSliders,
+      stemPredictions,
     },
   });
 

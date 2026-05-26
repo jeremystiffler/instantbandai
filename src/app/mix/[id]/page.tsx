@@ -5,12 +5,16 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
+type GenerateStem = "drums" | "bass" | "guitar" | "keys" | "strings" | "other";
+
 interface Stems {
   vocals?: string;
   bass?: string;
   drums?: string;
   guitar?: string;
   piano?: string;
+  keys?: string;
+  strings?: string;
   other?: string;
 }
 
@@ -29,6 +33,22 @@ interface Generation {
   bpm: number | null;
   key: string | null;
   chords: string | null;
+  mode?: string | null;
+  stemSliders?: Record<GenerateStem, number> | null;
+}
+
+const GENERATE_STEMS: GenerateStem[] = ["drums", "bass", "guitar", "keys", "strings", "other"];
+const STEM_LABELS: Record<GenerateStem, string> = {
+  drums: "🥁 Drums", bass: "🎸 Bass", guitar: "🎸 Guitar",
+  keys: "🎹 Keys", strings: "🎻 Strings", other: "✨ Other",
+};
+
+function sliderLabel(val: number) {
+  if (val <= 15) return "Mirror";
+  if (val <= 40) return "Close";
+  if (val <= 65) return "Blend";
+  if (val <= 85) return "Inspired";
+  return "Original";
 }
 
 interface TrackState {
@@ -225,6 +245,10 @@ export default function MixPage() {
   const [generation, setGeneration] = useState<Generation | null>(null);
   const [loading, setLoading] = useState(true);
   const [pollingStatus, setPollingStatus] = useState<string>("");
+  const [stemSliders, setStemSliders] = useState<Record<GenerateStem, number>>({
+    drums: 0, bass: 0, guitar: 0, keys: 0, strings: 0, other: 0,
+  });
+  const [rerenderingStem, setRerenderingStem] = useState<GenerateStem | null>(null);
 
   const [bpm, setBpm] = useState<number | null>(null);
   const [detectedKey, setDetectedKey] = useState<string | null>(null);
@@ -261,6 +285,10 @@ export default function MixPage() {
       if (data.chords) {
         try { setChords(JSON.parse(data.chords)); } catch {}
       }
+      if (data.stemSliders) {
+        const sl = typeof data.stemSliders === "string" ? JSON.parse(data.stemSliders) : data.stemSliders;
+        setStemSliders(prev => ({ ...prev, ...sl }));
+      }
       buildTracks(stemObj, data.sourceUrl);
     } else if (data.status === "failed") {
       setLoading(false);
@@ -282,13 +310,36 @@ export default function MixPage() {
       { id: "drums",    label: "Drums",    emoji: "🥁", color: "#ef4444", url: stems.drums    ?? null, volume: 80, muted: false, soloed: false },
       { id: "bass",     label: "Bass",     emoji: "🎸", color: "#f97316", url: stems.bass     ?? null, volume: 80, muted: false, soloed: false },
       { id: "guitar",   label: "Guitar",   emoji: "🎸", color: "#eab308", url: stems.guitar   ?? null, volume: 80, muted: false, soloed: false },
-      { id: "piano",    label: "Keys",     emoji: "🎹", color: "#22c55e", url: stems.piano    ?? null, volume: 80, muted: false, soloed: false },
+      { id: "keys",     label: "Keys",     emoji: "🎹", color: "#22c55e", url: stems.keys ?? stems.piano ?? null, volume: 80, muted: false, soloed: false },
+      { id: "strings",  label: "Strings",  emoji: "🎻", color: "#06b6d4", url: stems.strings  ?? null, volume: 80, muted: false, soloed: false },
       { id: "vocals",   label: "Vocals",   emoji: "🎤", color: "#3b82f6", url: stems.vocals   ?? null, volume: 80, muted: false, soloed: false },
       { id: "other",    label: "Other",    emoji: "🎵", color: "#8b5cf6", url: stems.other    ?? null, volume: 80, muted: false, soloed: false },
       { id: "click",    label: "Click",    emoji: "🖱️", color: "#94a3b8", url: null, volume: 60, muted: false, soloed: false, isClick: true },
       { id: "original", label: "Original", emoji: "📁", color: "#64748b", url: sourceUrl, volume: 70, muted: false, soloed: false, isOriginal: true },
     ];
     setTracks(list);
+  }
+
+  // ── Per-stem rerender ─────────────────────────────────────────────────────
+  async function handleRerender(stem: GenerateStem) {
+    if (rerenderingStem) return;
+    setRerenderingStem(stem);
+    try {
+      const res = await fetch("/api/rerender", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ generationId: id, stem, slider: stemSliders[stem] }),
+      });
+      if (!res.ok) throw new Error("Rerender failed");
+      // Start polling again
+      setLoading(true);
+      setPollingStatus(`Re-composing ${stem}…`);
+      setTimeout(fetchGeneration, 3000);
+    } catch (e) {
+      console.error("Rerender error", e);
+    } finally {
+      setRerenderingStem(null);
+    }
   }
 
   // ── Generate click track buffer ──────────────────────────────────────────
@@ -679,6 +730,43 @@ export default function MixPage() {
           </div>
         ))}
       </div>
+
+      {/* Per-stem creativity panel (generate mode only) */}
+      {generation?.mode === "generate" && (
+        <div className="max-w-5xl mx-auto px-4 mt-4">
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wider">🎛️ Stem Creativity</h3>
+              <span className="text-xs text-gray-500">Adjust a slider then hit ↺ to recompose that stem</span>
+            </div>
+            <div className="space-y-3">
+              {GENERATE_STEMS.map(stem => (
+                <div key={stem} className="flex items-center gap-3">
+                  <span className="w-24 text-sm text-white/60 shrink-0">{STEM_LABELS[stem]}</span>
+                  <input
+                    type="range" min={0} max={100} value={stemSliders[stem]}
+                    onChange={e => setStemSliders(prev => ({ ...prev, [stem]: Number(e.target.value) }))}
+                    className="flex-1 accent-violet-500 h-1.5"
+                  />
+                  <span className="w-16 text-right text-xs text-violet-300 shrink-0">{sliderLabel(stemSliders[stem])}</span>
+                  <button
+                    onClick={() => handleRerender(stem)}
+                    disabled={rerenderingStem !== null}
+                    title={`Re-compose ${stem}`}
+                    className="px-2 py-1 rounded text-xs bg-violet-900/50 hover:bg-violet-800 border border-violet-700 text-violet-300 transition disabled:opacity-40 shrink-0"
+                  >
+                    {rerenderingStem === stem ? "…" : "↺"}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between text-xs text-white/20 mt-2 px-[6.5rem]">
+              <span>← Mirror structure</span>
+              <span>Original →</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Chord Chart Section */}
       {(chords.length > 0 || analysisReady) && (

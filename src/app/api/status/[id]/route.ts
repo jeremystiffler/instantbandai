@@ -1,53 +1,101 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { GENERATE_STEMS } from "@/lib/musicgen";
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const generation = await prisma.generation.findUnique({
-    where: { id },
-  });
+  const generation = await prisma.generation.findUnique({ where: { id } });
   if (!generation) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // If already done or no replicate ID, just return
-  if (["completed", "failed"].includes(generation.status) || !generation.replicateId) {
+  // Already settled
+  if (["completed", "failed"].includes(generation.status)) {
     return NextResponse.json(generation);
   }
 
-  // Poll Replicate for current status
-  const repRes = await fetch(`https://api.replicate.com/v1/predictions/${generation.replicateId}`,
-      {
-        headers: { "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}` },
-      });
+  const apiToken = process.env.REPLICATE_API_TOKEN!;
 
-  if (!repRes.ok) return NextResponse.json(generation);
+  // ─── SEPARATE MODE (Demucs — single prediction ID) ──────────────────────────
+  if (generation.mode === "separate" || !generation.mode) {
+    if (!generation.replicateId) return NextResponse.json(generation);
 
-  const prediction = await repRes.json();
+    const repRes = await fetch(
+      `https://api.replicate.com/v1/predictions/${generation.replicateId}`,
+      { headers: { Authorization: `Token ${apiToken}` } }
+    );
+    if (!repRes.ok) return NextResponse.json(generation);
 
-  if (prediction.status === "succeeded" && prediction.output) {
-    // output: { vocals: url, bass: url, drums: url, guitar: url, piano: url, other: url }
-    if (!generation.stems) {
-      await prisma.generation.update({
+    const prediction = await repRes.json();
+
+    if (prediction.status === "succeeded" && prediction.output) {
+      const updated = await prisma.generation.update({
         where: { id },
-        data: {
-          stems: prediction.output,
-          status: "completed",
-        },
+        data: { stems: prediction.output, status: "completed" },
       });
+      return NextResponse.json(updated);
     }
-    const updated = await prisma.generation.findUnique({ where: { id } });
-    return NextResponse.json(updated);
+    if (["failed", "canceled"].includes(prediction.status)) {
+      const updated = await prisma.generation.update({
+        where: { id },
+        data: { status: "failed" },
+      });
+      return NextResponse.json(updated);
+    }
+    return NextResponse.json(generation);
   }
 
-  if (["failed", "canceled"].includes(prediction.status)) {
+  // ─── GENERATE MODE (MusicGen — per-stem prediction IDs) ────────────────────
+  const stemPredictions = (generation.stemPredictions ?? {}) as Record<string, string>;
+  const currentStems = (generation.stems ?? {}) as Record<string, string>;
+
+  // Poll all still-running stems in parallel
+  const polls = await Promise.all(
+    GENERATE_STEMS.map(async (stem) => {
+      const predId = stemPredictions[stem];
+      // Already completed or no prediction ID
+      if (!predId || currentStems[stem]) return { stem, url: currentStems[stem] ?? null, status: "done" };
+
+      const res = await fetch(`https://api.replicate.com/v1/predictions/${predId}`, {
+        headers: { Authorization: `Token ${apiToken}` },
+      });
+      if (!res.ok) return { stem, url: null, status: "unknown" };
+      const p = await res.json();
+
+      if (p.status === "succeeded" && p.output) {
+        return { stem, url: p.output as string, status: "succeeded" };
+      }
+      if (["failed", "canceled"].includes(p.status)) {
+        return { stem, url: null, status: "failed" };
+      }
+      return { stem, url: null, status: p.status as string };
+    })
+  );
+
+  // Merge newly-completed stem URLs into currentStems
+  const newStems = { ...currentStems };
+  let anyNew = false;
+  for (const { stem, url, status } of polls) {
+    if (status === "succeeded" && url) {
+      newStems[stem] = url;
+      anyNew = true;
+    }
+  }
+
+  // Determine overall status
+  const totalStems = GENERATE_STEMS.length;
+  const completedCount = Object.keys(newStems).length;
+  const anyFailed = polls.some((p) => p.status === "failed");
+  const allDone = completedCount >= totalStems;
+  const newStatus = allDone ? "completed" : anyFailed && completedCount === 0 ? "failed" : "processing";
+
+  if (anyNew || newStatus !== generation.status) {
     const updated = await prisma.generation.update({
       where: { id },
-      data: { status: "failed" },
+      data: { stems: newStems, status: newStatus },
     });
     return NextResponse.json(updated);
   }
 
-  // Still processing — return current DB state
   return NextResponse.json(generation);
 }
