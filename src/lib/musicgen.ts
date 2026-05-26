@@ -206,7 +206,7 @@ export function buildMusicGenInput(
     temperature,
     classifier_free_guidance: cfg,
     top_k: 250,
-    model_version: "melody",
+    model_version: "melody-large",
     output_format: "wav",
     normalization_strategy: "loudness",
   };
