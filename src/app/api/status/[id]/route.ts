@@ -105,11 +105,13 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
     return NextResponse.json({
       ...updated,
       stemProgress: { completed: completedCount, total: totalStems },
+      stemStatuses: Object.fromEntries(polls.map(p => [p.stem, p.status])),
     });
   }
 
   return NextResponse.json({
     ...generation,
     stemProgress: { completed: completedCount, total: totalStems },
+    stemStatuses: Object.fromEntries(polls.map(p => [p.stem, p.status])),
   });
 }

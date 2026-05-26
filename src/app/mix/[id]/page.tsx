@@ -246,6 +246,7 @@ export default function MixPage() {
   const [loading, setLoading] = useState(true);
   const [pollingStatus, setPollingStatus] = useState<string>("");
   const [stemProgress, setStemProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [stemStatuses, setStemStatuses] = useState<Record<string, string>>({});
   const [stemSliders, setStemSliders] = useState<Record<GenerateStem, number>>({
     drums: 0, bass: 0, guitar: 0, keys: 0, strings: 0, other: 0,
   });
@@ -299,8 +300,9 @@ export default function MixPage() {
       setPollingStatus("Generation failed. Please try again.");
     } else {
       if (data.stemProgress) setStemProgress(data.stemProgress);
+      if (data.stemStatuses) setStemStatuses(data.stemStatuses);
       setPollingStatus(`Processing… ${data.status}`);
-      setTimeout(fetchGeneration, 3000);
+      setTimeout(fetchGeneration, 1500);
     }
   }, [id]);
 
@@ -580,25 +582,58 @@ export default function MixPage() {
     const pct = stemProgress && stemProgress.total > 0
       ? Math.round((stemProgress.completed / stemProgress.total) * 100)
       : null;
+    const STEM_ICONS: Record<string, string> = {
+      drums: "🥁", bass: "🎸", guitar: "🎸", keys: "🎹",
+      strings: "🎻", other: "🌊",
+    };
+    const stemEntries = Object.entries(stemStatuses);
     return (
       <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-6 px-6">
         <div className="w-16 h-16 border-4 border-purple-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-gray-400 text-lg text-center">
-          {pollingStatus || "Loading your mix…"}
-        </p>
+        <div className="text-center">
+          <p className="text-white text-lg font-semibold mb-1">
+            {pct !== null ? `Composing your stems…` : "Loading your mix…"}
+          </p>
+          {pct !== null && (
+            <p className="text-white/40 text-sm">{stemProgress!.completed} of {stemProgress!.total} tracks ready</p>
+          )}
+        </div>
         {pct !== null && (
-          <div className="w-full max-w-sm">
-            <div className="flex justify-between text-xs text-white/40 mb-1">
-              <span>Composing stems…</span>
-              <span>{stemProgress!.completed} / {stemProgress!.total} done</span>
-            </div>
-            <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+          <div className="w-full max-w-md">
+            <div className="w-full bg-white/10 rounded-full h-2.5 overflow-hidden mb-3">
               <div
-                className="h-full bg-violet-500 rounded-full transition-all duration-500"
+                className="h-full bg-violet-500 rounded-full transition-all duration-700"
                 style={{ width: `${pct}%` }}
               />
             </div>
-            <p className="text-center text-xs text-white/30 mt-2">{pct}% · AI is composing each track in parallel</p>
+            {/* Per-stem status pills */}
+            {stemEntries.length > 0 && (
+              <div className="flex flex-wrap gap-2 justify-center">
+                {stemEntries.map(([stem, status]) => {
+                  const icon = STEM_ICONS[stem.split("-")[0]] ?? "🎵";
+                  const label = stem.replace(/-/g, " ");
+                  const done = status === "succeeded";
+                  const failed = status === "failed";
+                  return (
+                    <span
+                      key={stem}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all duration-300 ${
+                        done
+                          ? "bg-violet-900/60 border-violet-500 text-violet-200"
+                          : failed
+                          ? "bg-red-900/40 border-red-700 text-red-300"
+                          : "bg-white/5 border-white/10 text-white/40 animate-pulse"
+                      }`}
+                    >
+                      <span>{icon}</span>
+                      <span className="capitalize">{label}</span>
+                      <span>{done ? "✓" : failed ? "✗" : "…"}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            <p className="text-center text-xs text-white/20 mt-3">All tracks compose in parallel · typically 1–2 min total</p>
           </div>
         )}
       </div>

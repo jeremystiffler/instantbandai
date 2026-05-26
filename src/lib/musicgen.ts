@@ -181,7 +181,7 @@ export function buildMusicGenInput(
   sourceUrl: string,
   bpm?: number | null,
   key?: string | null,
-  duration = 30
+    duration = 15
 ): MusicGenInput {
   const s = Math.max(0, Math.min(100, slider));
 
@@ -206,7 +206,7 @@ export function buildMusicGenInput(
     temperature,
     classifier_free_guidance: cfg,
     top_k: 250,
-    model_version: "stereo-melody-large",
+    model_version: "melody",
     output_format: "wav",
     normalization_strategy: "loudness",
   };
