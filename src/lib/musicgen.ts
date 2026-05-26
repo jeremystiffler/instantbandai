@@ -142,19 +142,19 @@ export const VARIANT_LABELS: Record<string, string> = Object.fromEntries(
 
 /** All instrument prompts (base stems + extras/variants) */
 const STEM_PROMPTS: Record<string, string> = {
-  drums:   "acoustic drum kit, live drums, full kit",
-  bass:    "electric bass guitar, groove bass line, low-end foundation",
-  guitar:  "electric guitar, rhythm guitar chords",
-  keys:    "piano keys, keyboard chords, melodic support",
-  strings: "orchestral string ensemble, cinematic sustain",
-  other:   "ambient texture, atmospheric pad, experimental",
-  // variant entries (acoustic-guitar-fingerpick, etc.)
+  drums:   "live acoustic drum kit, tight snare, punchy kick, steady groove, professional studio recording",
+  bass:    "electric bass guitar, clean fingerstyle, melodic bass line, deep low-end, locked-in groove",
+  guitar:  "electric guitar, clean tone, rhythm chords, musical and tasteful, studio quality",
+  keys:    "grand piano, melodic chord voicings, expressive touch, warm and musical",
+  strings: "lush orchestral string ensemble, smooth bowing, rich harmonic sustain, cinematic",
+  other:   "ambient atmospheric pad, slow evolving texture, musical background",
+  // variant entries
   ...VARIANT_PROMPTS,
 };
 
 export interface MusicGenInput {
   prompt: string;
-  input_audio: string;
+  input_audio?: string;       // only used for melody-large; omitted for stereo-large
   duration: number;
   continuation: boolean;
   continuation_start: number;
@@ -168,46 +168,43 @@ export interface MusicGenInput {
 
 /**
  * Build MusicGen input for a given stem + slider value.
- * @param stem   Which instrument to generate
- * @param slider 0 (mirror) … 100 (original)
- * @param sourceUrl  Uploaded audio URL used as the melody/continuation guide
- * @param bpm    Optional BPM for prompt enrichment
- * @param key    Optional key for prompt enrichment
- * @param duration Seconds of output audio to generate (default 30)
+ *
+ * Strategy: use stereo-large (text-only) — melody-large uses the full mix
+ * as its melody guide which causes atonal noise when a full song is the source.
+ * stereo-large with strong CFG + lower temp produces clean, musical instrument stems.
  */
 export function buildMusicGenInput(
   stem: string,
   slider: number,
-  sourceUrl: string,
+  _sourceUrl: string,   // kept for API compat; not sent to model (text-only mode)
   bpm?: number | null,
   key?: string | null,
-    duration = 30
+  duration = 30
 ): MusicGenInput {
   const s = Math.max(0, Math.min(100, slider));
 
-  // Interpolate params
-  // temperature: 0.7 (mirror) → 1.3 (original)
-  const temperature = 0.7 + (s / 100) * 0.6;
-  // CFG: 5 (mirror) → 2 (original)
-  const cfg = Math.round(5 - (s / 100) * 3);
-  // continuation mode only at slider < 25, but ONLY when source audio is short
-  // For safety always disable continuation to avoid "prompt longer than audio" errors
-  const continuation = false;
+  // Lower temperature = more coherent / musical output
+  // temperature: 0.6 (mirror) → 1.0 (original)
+  const temperature = 0.6 + (s / 100) * 0.4;
+  // CFG: 7 (high guidance) → 4 (more creative) — high CFG keeps it on-prompt and tonal
+  const cfg = Math.round(7 - (s / 100) * 3);
 
   const keyStr = key ? ` in the key of ${key}` : "";
   const bpmStr = bpm ? ` at ${Math.round(bpm)} BPM` : "";
-  const prompt = `${STEM_PROMPTS[stem]}${keyStr}${bpmStr}, matching the mood and structure of the reference track`;
+  const styleStr = s < 33 ? ", subtle and supportive, low in the mix" :
+                   s < 66 ? ", balanced melodic presence" :
+                             ", expressive and prominent";
+  const prompt = `${STEM_PROMPTS[stem]}${keyStr}${bpmStr}${styleStr}, high quality, professional studio recording`;
 
   return {
     prompt,
-    input_audio: sourceUrl,
     duration,
-    continuation,
+    continuation: false,
     continuation_start: 0,
     temperature,
     classifier_free_guidance: cfg,
     top_k: 250,
-    model_version: "melody-large",
+    model_version: "stereo-large",
     output_format: "wav",
     normalization_strategy: "loudness",
   };
