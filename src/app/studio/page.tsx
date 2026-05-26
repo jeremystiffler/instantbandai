@@ -314,7 +314,8 @@ function sliderLabel(val: number) {
                   <select
                     value={manualKey}
                     onChange={(e) => setManualKey(e.target.value)}
-                    className="bg-white/5 border border-white/10 rounded-lg text-white/80 text-xs px-2.5 py-1.5 focus:outline-none focus:border-violet-500/60 cursor-pointer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="bg-zinc-900 border border-white/10 rounded-lg text-white/80 text-xs px-2.5 py-1.5 focus:outline-none focus:border-violet-500/60 cursor-pointer [&>option]:bg-zinc-900 [&>option]:text-white"
                   >
                     <option value="">— unknown —</option>
                     {["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"].flatMap(note => [
