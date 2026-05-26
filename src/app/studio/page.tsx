@@ -2,6 +2,7 @@
 import { useSession, signIn } from "next-auth/react";
 import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { uploadFiles } from "uploadthing/client";
 
 export default function StudioPage() {
   const { data: session, status } = useSession();
@@ -75,27 +76,13 @@ export default function StudioPage() {
     if (!file) return;
     setLoading(true);
     setError("");
-
-    // Vercel Hobby plan hard limit — warn early
-    if (file.size > 4 * 1024 * 1024) {
-      setError("File too large. Please use an MP3 under 4MB or trim your audio first. (Tip: a 30-second MP3 is ~500KB)");
-      setLoading(false);
-      return;
-    }
-
     try {
       setLoadingMsg("Uploading audio…");
-      const formData = new FormData();
-      formData.append("file", file);
-      const uploadRes = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-      if (!uploadRes.ok) {
-        const err = await uploadRes.json().catch(() => ({}));
-        throw new Error(err.error || `Upload failed (${uploadRes.status})`);
-      }
-      const { key, publicUrl } = await uploadRes.json();
+
+      // Upload via UploadThing — no Vercel size limits, up to 256MB
+      const [res] = await uploadFiles("audioUploader", { files: [file] });
+      const publicUrl = res.url;
+      const key = res.key;
 
       setLoadingMsg("Starting stem generation…");
       const genRes = await fetch("/api/generate", {
