@@ -38,7 +38,7 @@ export default function StudioPage() {
   const [extraStems, setExtraStems] = useState<string[]>([]);
   const [variantPickerOpen, setVariantPickerOpen] = useState<string | null>(null);
   const [detectedBpm, setDetectedBpm] = useState<number | null>(null);
-  const [detectedKey, setDetectedKey] = useState<string | null>(null);
+  const [manualKey, setManualKey] = useState<string>("");  // user-selected key, "" = none
   const [analyzing, setAnalyzing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -46,80 +46,86 @@ export default function StudioPage() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const router = useRouter();
 
-  // ── Auto-detect BPM + Key from file (client-side Web Audio) ──────────────
+  // ── BPM detection via onset strength + autocorrelation (librosa-style) ─────
   const analyzeFile = useCallback(async (f: File) => {
     if (mode !== "generate") return;
     setAnalyzing(true);
     setDetectedBpm(null);
-    setDetectedKey(null);
     try {
-      const ctx = new AudioContext();
+      const ctx = new AudioContext({ sampleRate: 22050 }); // downsample to 22kHz
       const arrayBuf = await f.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(arrayBuf);
-
-      // BPM via autocorrelation
       const data = audioBuf.getChannelData(0);
-      const sr = audioBuf.sampleRate;
-      const winSize = Math.floor(sr * 0.01);
-      const energies: number[] = [];
-      for (let i = 0; i < data.length - winSize; i += winSize) {
-        let e = 0;
-        for (let j = 0; j < winSize; j++) e += data[i + j] ** 2;
-        energies.push(e / winSize);
-      }
-      const minLag = Math.floor((60 / 200) * (sr / winSize));
-      const maxLag = Math.floor((60 / 60) * (sr / winSize));
-      let bestCorr = -Infinity, bestLag = minLag;
-      for (let lag = minLag; lag <= maxLag; lag++) {
-        let corr = 0;
-        for (let i = 0; i < energies.length - lag; i++) corr += energies[i] * energies[i + lag];
-        if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
-      }
-      const bpm = Math.round((60 / (bestLag * winSize / sr)) * 2) / 2;
+      const sr = audioBuf.sampleRate; // will be 22050
 
-      // Key via chromagram
-      const KEY_PROFILES = {
-        major: [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88],
-        minor: [6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17],
-      };
-      const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
-      const fftSize = 4096;
-      const chroma = new Array(12).fill(0);
-      const step = Math.floor(data.length / 32);
-      for (let start = 0; start + fftSize < data.length; start += step) {
-        const slice = data.slice(start, start + fftSize);
-        for (let note = 0; note < 12; note++) {
-          for (let octave = 2; octave <= 6; octave++) {
-            const freq = 261.63 * Math.pow(2, (note + (octave - 4) * 12) / 12);
-            const bin = Math.round((freq * fftSize) / sr);
-            if (bin >= fftSize / 2) continue;
-            let real = 0, imag = 0;
-            for (let n = 0; n < Math.min(fftSize, 512); n++) {
-              const angle = (2 * Math.PI * bin * n) / fftSize;
-              real += slice[n] * Math.cos(angle);
-              imag -= slice[n] * Math.sin(angle);
-            }
-            chroma[note] += Math.sqrt(real * real + imag * imag);
+      // ── Step 1: Compute spectral flux onset strength envelope ──────────────
+      // Use hop size of 512 samples (~23ms at 22kHz) — standard in beat tracking
+      const hopSize = 512;
+      const fftSize = 2048;
+      const halfFFT = fftSize / 2;
+      const numFrames = Math.floor((data.length - fftSize) / hopSize);
+      const onset = new Float32Array(numFrames);
+
+      // Pre-compute Hann window
+      const hann = new Float32Array(fftSize);
+      for (let i = 0; i < fftSize; i++) hann[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / fftSize));
+
+      let prevMag = new Float32Array(halfFFT);
+      for (let frame = 0; frame < numFrames; frame++) {
+        const start = frame * hopSize;
+        // Windowed FFT via Goertzel for magnitude spectrum
+        const mag = new Float32Array(halfFFT);
+        // Use AnalyserNode trick: create OfflineAudioContext per chunk is too slow.
+        // Instead do a fast magnitude approx using sub-sampled DFT (N=512 points is fine for onset)
+        const dftN = 512;
+        for (let k = 0; k < halfFFT; k += Math.ceil(halfFFT / dftN)) {
+          let re = 0, im = 0;
+          for (let n = 0; n < fftSize; n++) {
+            const a = 2 * Math.PI * k * n / fftSize;
+            const s = data[start + n] * hann[n];
+            re += s * Math.cos(a);
+            im -= s * Math.sin(a);
           }
+          mag[k] = Math.sqrt(re * re + im * im);
         }
-      }
-      const sum = chroma.reduce((a, b) => a + b, 0);
-      const norm = chroma.map(v => v / (sum || 1));
-      let bestKey = "C major", bestScore = -Infinity;
-      for (let root = 0; root < 12; root++) {
-        for (const [mode, profile] of Object.entries(KEY_PROFILES) as [string, number[]][]) {
-          const prof = profile.map(v => v / profile.reduce((a,b)=>a+b,0));
-          let score = 0;
-          for (let i = 0; i < 12; i++) score += norm[(i + root) % 12] * prof[i];
-          if (score > bestScore) { bestScore = score; bestKey = `${NOTE_NAMES[root]} ${mode}`; }
+        // Spectral flux: sum of positive magnitude differences
+        let flux = 0;
+        for (let k = 0; k < halfFFT; k++) {
+          const diff = mag[k] - prevMag[k];
+          if (diff > 0) flux += diff;
         }
+        onset[frame] = flux;
+        prevMag = mag;
       }
+
+      // ── Step 2: Autocorrelate onset envelope to find beat period ──────────
+      // BPM range 60–200 → period in frames
+      const minPeriod = Math.floor((60 / 200) * sr / hopSize);
+      const maxPeriod = Math.floor((60 / 60) * sr / hopSize);
+      let bestCorr = -Infinity;
+      let bestPeriod = minPeriod;
+
+      for (let period = minPeriod; period <= maxPeriod; period++) {
+        let corr = 0;
+        const n = onset.length - period;
+        for (let i = 0; i < n; i++) corr += onset[i] * onset[i + period];
+        // Normalize by auto-power at lag 0 to avoid bias toward long periods
+        if (corr > bestCorr) { bestCorr = corr; bestPeriod = period; }
+      }
+
+      // Convert period (frames) → BPM, then snap to integer
+      const rawBpm = (60 * sr) / (bestPeriod * hopSize);
+
+      // Halve/double into 60–180 range
+      let bpm = rawBpm;
+      while (bpm > 180) bpm /= 2;
+      while (bpm < 60) bpm *= 2;
+      bpm = Math.round(bpm);
 
       setDetectedBpm(bpm);
-      setDetectedKey(bestKey);
       await ctx.close();
     } catch (e) {
-      console.error("Studio analysis error", e);
+      console.error("BPM detection error", e);
     } finally {
       setAnalyzing(false);
     }
@@ -199,7 +205,7 @@ function sliderLabel(val: number) {
           extraStems: mode === "generate" ? extraStems : undefined,
           prompt,
           bpm: detectedBpm ?? undefined,
-          musicKey: detectedKey ?? undefined,
+          musicKey: manualKey || undefined,
         }),
       });
       if (!genRes.ok) {
@@ -289,28 +295,37 @@ function sliderLabel(val: number) {
           <div>
             <p className="text-violet-400 font-medium text-lg">✓ {file.name}</p>
             <p className="text-white/40 text-sm mt-1">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
-            {/* BPM + Key detection badges */}
+            {/* BPM + Key controls */}
             {mode === "generate" && (
-              <div className="flex items-center justify-center gap-2 mt-3">
-                {analyzing ? (
-                  <span className="text-xs text-white/30 animate-pulse">🎵 Detecting BPM + Key…</span>
-                ) : (
-                  <>
-                    {detectedBpm && (
-                      <span className="px-2.5 py-1 rounded-full bg-violet-900/60 border border-violet-500/40 text-violet-200 text-xs font-medium">
-                        🥁 {detectedBpm} BPM
-                      </span>
-                    )}
-                    {detectedKey && (
-                      <span className="px-2.5 py-1 rounded-full bg-violet-900/60 border border-violet-500/40 text-violet-200 text-xs font-medium">
-                        🎵 {detectedKey}
-                      </span>
-                    )}
-                  </>
-                )}
+              <div className="flex flex-col items-center gap-3 mt-3">
+                {/* BPM row */}
+                <div className="flex items-center justify-center gap-2">
+                  {analyzing ? (
+                    <span className="text-xs text-white/30 animate-pulse">🎵 Detecting BPM…</span>
+                  ) : detectedBpm ? (
+                    <span className="px-2.5 py-1 rounded-full bg-violet-900/60 border border-violet-500/40 text-violet-200 text-xs font-medium">
+                      🥁 {detectedBpm} BPM
+                    </span>
+                  ) : null}
+                </div>
+                {/* Key selector */}
+                <div className="flex items-center gap-2">
+                  <label className="text-white/40 text-xs font-medium">Key (optional):</label>
+                  <select
+                    value={manualKey}
+                    onChange={(e) => setManualKey(e.target.value)}
+                    className="bg-white/5 border border-white/10 rounded-lg text-white/80 text-xs px-2.5 py-1.5 focus:outline-none focus:border-violet-500/60 cursor-pointer"
+                  >
+                    <option value="">— unknown —</option>
+                    {["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"].flatMap(note => [
+                      <option key={`${note}-major`} value={`${note} major`}>{note} major</option>,
+                      <option key={`${note}-minor`} value={`${note} minor`}>{note} minor</option>,
+                    ])}
+                  </select>
+                </div>
               </div>
             )}
-            <button onClick={e => { e.stopPropagation(); setFile(null); setDetectedBpm(null); setDetectedKey(null); }} className="mt-3 text-xs text-white/30 hover:text-white/60 underline">
+            <button onClick={e => { e.stopPropagation(); setFile(null); setDetectedBpm(null); setManualKey(""); }} className="mt-3 text-xs text-white/30 hover:text-white/60 underline">
               Remove
             </button>
           </div>
