@@ -35,8 +35,8 @@ export default function StudioPage() {
   const [dragging, setDragging] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [mode, setMode] = useState<"separate" | "loops" | "fullmix">("loops");
-  const [fullMixPrompt, setFullMixPrompt] = useState("cinematic, emotional, modern, acoustic guitar, piano, strings");
+  const [mode, setMode] = useState<"separate" | "melody" | "style" | "loops">("melody");
+  const [stylePrompt, setStylePrompt] = useState("cinematic orchestral worship arrangement, strings, piano, choir, full band");
   const [sliders, setSliders] = useState<Record<GenerateStem, number>>({ ...DEFAULT_SLIDERS });
   const [extraStems, setExtraStems] = useState<string[]>([]);
   const [variantPickerOpen, setVariantPickerOpen] = useState<string | null>(null);
@@ -51,7 +51,7 @@ export default function StudioPage() {
 
   // ── BPM detection via music-tempo (ACF beat tracker, ~200ms) ──────────────
   const analyzeFile = useCallback(async (f: File) => {
-    if (mode !== "loops") return;
+    if (mode !== "melody" && mode !== "loops" && mode !== "style") return;
     setAnalyzing(true);
     setDetectedBpm(null);
     try {
@@ -137,7 +137,7 @@ function sliderLabel(val: number) {
       const publicUrl = res.url;
       const key = res.key;
 
-      setLoadingMsg(mode === "loops" ? "Generating instrument loops…" : mode === "fullmix" ? "Composing full mix with AI…" : "Starting stem separation…");
+      setLoadingMsg(mode === "melody" ? "Orchestrating your melody…" : mode === "style" ? "Composing full track with AI…" : mode === "loops" ? "Generating instrument loops…" : "Starting stem separation…");
       const genRes = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -147,7 +147,7 @@ function sliderLabel(val: number) {
           mode,
           sliders: mode === "loops" ? sliders : undefined,
           extraStems: mode === "loops" ? extraStems : undefined,
-          fullMixPrompt: mode === "fullmix" ? fullMixPrompt : undefined,
+          stylePrompt: (mode === "style" || mode === "melody") ? stylePrompt : undefined,
           bpm: detectedBpm ?? undefined,
           musicKey: manualKey || undefined,
         }),
@@ -184,58 +184,82 @@ function sliderLabel(val: number) {
       <h1 className="text-3xl font-bold mb-8">Studio</h1>
 
       {/* Mode Toggle */}
-      <div className="flex gap-2 mb-8 p-1 bg-white/5 rounded-xl border border-white/10">
+      <div className="flex gap-1 mb-6 p-1 bg-white/5 rounded-xl border border-white/10 flex-wrap">
+        <button
+          onClick={() => setMode("melody")}
+          className={`flex-1 py-2.5 px-3 rounded-lg text-sm font-medium transition whitespace-nowrap ${
+            mode === "melody"
+              ? "bg-violet-600 text-white"
+              : "text-white/50 hover:text-white/80"
+          }`}
+        >
+          🎼 Orchestrate Melody
+        </button>
+        <button
+          onClick={() => setMode("style")}
+          className={`flex-1 py-2.5 px-3 rounded-lg text-sm font-medium transition whitespace-nowrap ${
+            mode === "style"
+              ? "bg-emerald-600 text-white"
+              : "text-white/50 hover:text-white/80"
+          }`}
+        >
+          ✨ Style Compose
+        </button>
         <button
           onClick={() => setMode("loops")}
-          className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium transition ${
+          className={`flex-1 py-2.5 px-3 rounded-lg text-sm font-medium transition whitespace-nowrap ${
             mode === "loops"
-              ? "bg-violet-600 text-white"
+              ? "bg-amber-600 text-white"
               : "text-white/50 hover:text-white/80"
           }`}
         >
           🎛️ Instrument Loops
         </button>
         <button
-          onClick={() => setMode("fullmix")}
-          className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium transition ${
-            mode === "fullmix"
-              ? "bg-violet-600 text-white"
-              : "text-white/50 hover:text-white/80"
-          }`}
-        >
-          🎵 Full Song Mix
-        </button>
-        <button
           onClick={() => setMode("separate")}
-          className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium transition ${
+          className={`flex-1 py-2.5 px-3 rounded-lg text-sm font-medium transition whitespace-nowrap ${
             mode === "separate"
-              ? "bg-violet-600 text-white"
+              ? "bg-blue-600 text-white"
               : "text-white/50 hover:text-white/80"
           }`}
         >
-          ✂️ Separation
+          ✂️ Separate
         </button>
       </div>
 
-      {mode === "loops" && (
-        <div className="mb-6 p-1.5 rounded-xl bg-violet-500/5 border border-violet-500/20">
-          <p className="text-white/50 text-xs px-3 pt-2 pb-3">
-            Generates clean 8-second instrument loops (drums, bass, guitar, keys, strings) matched to your BPM and key. Loops play continuously in the mix.
-          </p>
-        </div>
-      )}
-      {mode === "fullmix" && (
-        <div className="mb-6 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 space-y-3">
+      {mode === "melody" && (
+        <div className="mb-6 p-3 rounded-xl bg-violet-500/5 border border-violet-500/20 space-y-3">
           <p className="text-white/50 text-xs">
-            AI composes a complete stereo backing track from scratch. Describe the style below.
+            Upload your melody or piano demo — AI orchestrates a full arrangement that <strong className="text-white/70">follows your exact melody</strong>. Describe the style below.
           </p>
           <input
             type="text"
-            value={fullMixPrompt}
-            onChange={(e) => setFullMixPrompt(e.target.value)}
-            placeholder="e.g. cinematic, worship, acoustic guitar, piano, strings..."
+            value={stylePrompt}
+            onChange={(e) => setStylePrompt(e.target.value)}
+            placeholder="e.g. cinematic orchestral worship, strings, piano, choir, full band..."
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-violet-500/50"
+          />
+        </div>
+      )}
+      {mode === "style" && (
+        <div className="mb-6 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 space-y-3">
+          <p className="text-white/50 text-xs">
+            AI composes an original full stereo backing track from scratch. Not melody-locked — more creative freedom. Describe the style below.
+          </p>
+          <input
+            type="text"
+            value={stylePrompt}
+            onChange={(e) => setStylePrompt(e.target.value)}
+            placeholder="e.g. cinematic, worship, acoustic guitar, piano, strings, 90 BPM..."
             className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-500/50"
           />
+        </div>
+      )}
+      {mode === "loops" && (
+        <div className="mb-6 p-1.5 rounded-xl bg-amber-500/5 border border-amber-500/20">
+          <p className="text-white/50 text-xs px-3 pt-2 pb-3">
+            Generates clean 8-second instrument loops (drums, bass, guitar, keys, strings) matched to your BPM and key. Loops play continuously in the mix.
+          </p>
         </div>
       )}
       {mode === "separate" && (
@@ -264,7 +288,7 @@ function sliderLabel(val: number) {
             <p className="text-violet-400 font-medium text-lg">✓ {file.name}</p>
             <p className="text-white/40 text-sm mt-1">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
             {/* BPM + Key controls */}
-            {(mode === "loops" || mode === "fullmix") && (
+            {(mode === "melody" || mode === "style" || mode === "loops") && (
               <div className="flex flex-col items-center gap-3 mt-3">
                 {/* BPM row */}
                 <div className="flex items-center justify-center gap-2">
@@ -498,7 +522,7 @@ function sliderLabel(val: number) {
         disabled={!file || loading}
         className="w-full py-4 bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl font-semibold text-lg transition"
       >
-        {loading ? loadingMsg || "Working…" : mode === "loops" ? "Generate Loops →" : mode === "fullmix" ? "Compose Full Mix →" : "Separate Stems →"}
+        {loading ? loadingMsg || "Working…" : mode === "melody" ? "Orchestrate →" : mode === "style" ? "Compose Style →" : mode === "loops" ? "Generate Loops →" : "Separate Stems →"}
       </button>
     </div>
   );

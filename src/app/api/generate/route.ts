@@ -5,10 +5,12 @@ import { getPublicUrl } from "@/lib/r2";
 import { NextResponse } from "next/server";
 import {
   DEMUCS_VERSION,
+  MUSICGEN_VERSION,
   ACE_STEP_VERSION,
   GENERATE_STEMS,
   buildLoopInput,
   buildFullMixInput,
+  buildMelodyOrchestrationInput,
   startAllStemPredictions,
   startPrediction,
   type GenerateStem,
@@ -24,13 +26,13 @@ export async function POST(req: Request) {
   const {
     key,
     sourceUrl: providedSourceUrl,
-    mode = "loops",        // "separate" | "loops" | "fullmix"
+    mode = "melody",        // "melody" | "style" | "loops" | "separate"
     sliders = {},
     extraStems = [],
     bpm,
     musicKey,
-    duration = 45,
-    fullMixPrompt = "cinematic, orchestral, emotional, modern",
+    duration = 30,
+    stylePrompt = "cinematic orchestral worship arrangement, strings, piano, choir, full band",
   } = await req.json();
 
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
@@ -80,15 +82,55 @@ export async function POST(req: Request) {
     return NextResponse.json({ id: generation.id });
   }
 
-  // ─── FULL MIX MODE (ACE-Step — single stereo track) ─────────────────────
-  if (mode === "fullmix") {
-    const input = buildFullMixInput(fullMixPrompt, bpm, musicKey, duration);
+  // ─── MELODY MODE (MusicGen stereo-melody-large) ──────────────────────────
+  // Uploads your melody audio → outputs full orchestrated arrangement following your melody.
+  if (mode === "melody") {
+    const input = buildMelodyOrchestrationInput(sourceUrl, stylePrompt, bpm, musicKey, duration);
     const generation = await prisma.generation.create({
       data: {
         userId: user.id,
         sourceUrl,
         status: "processing",
-        mode: "fullmix",
+        mode: "melody",
+        bpm: bpm ?? null,
+        key: musicKey ?? null,
+        stemPredictions: {},
+      },
+    });
+
+    (async () => {
+      try {
+        const predId = await startPrediction(
+          MUSICGEN_VERSION,
+          input as unknown as Record<string, unknown>,
+          apiToken,
+          webhookUrl
+        );
+        await prisma.generation.update({
+          where: { id: generation.id },
+          data: { stemPredictions: { fullmix: predId } },
+        });
+      } catch (e) {
+        console.error("MusicGen melody start failed:", e);
+        await prisma.generation.update({
+          where: { id: generation.id },
+          data: { status: "failed" },
+        });
+      }
+    })();
+
+    return NextResponse.json({ id: generation.id });
+  }
+
+  // ─── STYLE MODE (ACE-Step — text-prompted full stereo track) ─────────────
+  if (mode === "style") {
+    const input = buildFullMixInput(stylePrompt, bpm, musicKey, duration);
+    const generation = await prisma.generation.create({
+      data: {
+        userId: user.id,
+        sourceUrl,
+        status: "processing",
+        mode: "style",
         bpm: bpm ?? null,
         key: musicKey ?? null,
         stemPredictions: {},

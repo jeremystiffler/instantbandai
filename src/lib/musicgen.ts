@@ -9,6 +9,11 @@
 export const DEMUCS_VERSION =
   "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
 
+// MusicGen — melody-conditioned orchestration (primary "Orchestrate" mode)
+// stereo-melody-large: feeds your melody audio in, outputs full arrangement following it
+export const MUSICGEN_VERSION =
+  "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
+
 // Stable Audio Open — short isolated instrument loops
 export const STABLE_AUDIO_VERSION =
   "9aff84a639f96d0f7e6081cdea002d15133d0043727f849c40abdd166b7c75a8";
@@ -214,6 +219,52 @@ export function buildLoopInput(
     sigma_max: 500,
     init_noise_level: 1,
     batch_size: 1,
+  };
+}
+
+// ─── MUSICGEN MELODY — Melody Orchestration Builder ─────────────────────────
+
+export interface MusicGenMelodyInput {
+  prompt: string;
+  melody: string;          // URL of uploaded melody audio
+  model_version: string;
+  duration: number;
+  top_k: number;
+  top_p: number;
+  temperature: number;
+  classifier_free_guidance: number;
+  output_format: string;
+  normalization_strategy: string;
+}
+
+/**
+ * Build MusicGen input for melody-conditioned orchestration.
+ * Uses stereo-melody-large: your melody audio drives the melodic structure,
+ * the prompt drives style/instrumentation. This is the primary use case:
+ * "I have a simple melody — orchestrate it."
+ */
+export function buildMelodyOrchestrationInput(
+  melodyUrl: string,
+  stylePrompt: string,
+  bpm?: number | null,
+  key?: string | null,
+  duration = 30,
+): MusicGenMelodyInput {
+  const bpmStr = bpm ? `${Math.round(bpm)} BPM, ` : "";
+  const keyStr = key ? `in the key of ${key}, ` : "";
+  const prompt = `${bpmStr}${keyStr}${stylePrompt}`;
+
+  return {
+    prompt,
+    melody: melodyUrl,
+    model_version: "stereo-melody-large",
+    duration,
+    top_k: 250,
+    top_p: 0,
+    temperature: 1,
+    classifier_free_guidance: 4,
+    output_format: "mp3",
+    normalization_strategy: "loudness",
   };
 }
 
