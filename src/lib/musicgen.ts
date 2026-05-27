@@ -226,7 +226,7 @@ export function buildLoopInput(
 
 export interface MusicGenMelodyInput {
   prompt: string;
-  melody: string;          // URL of uploaded melody audio
+  input_audio: string;   // URL of uploaded melody audio (was "melody" — wrong field name)
   model_version: string;
   duration: number;
   top_k: number;
@@ -256,7 +256,7 @@ export function buildMelodyOrchestrationInput(
 
   return {
     prompt,
-    melody: melodyUrl,
+    input_audio: melodyUrl,
     model_version: "stereo-melody-large",
     duration,
     top_k: 250,

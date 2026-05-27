@@ -297,8 +297,8 @@ export default function MixPage() {
         : [];
       buildTracks(stemObj, data.sourceUrl, extraArr);
 
-      // Auto-run BPM + key analysis if not already stored
-      if (!data.bpm || !data.key) {
+      // Auto-run BPM + key + chord analysis if not already stored
+      if (!data.bpm || !data.key || !data.chords) {
         setAutoAnalyze(true);
       }
     } else if (data.status === "failed") {
@@ -937,7 +937,7 @@ export default function MixPage() {
 
             {chords.length === 0 && !analysisDoing && (
               <div className="text-center text-gray-500 py-8">
-                <p>Run "Detect BPM + Key" above to generate chord detection.</p>
+                <p>Chord chart will appear automatically after analysis completes.</p>
               </div>
             )}
             {analysisDoing && (
