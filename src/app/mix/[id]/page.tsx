@@ -3,6 +3,16 @@
 import { useSession } from "next-auth/react";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
+import MusicTempo from "music-tempo";
+import {
+  detectKey,
+  detectChords,
+  getRomanNumeral,
+  getChordFunction,
+  transposeChord,
+  transposeKey,
+  type ChordEvent,
+} from "@/lib/chordAnalysis";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 type GenerateStem = "drums" | "bass" | "guitar" | "keys" | "strings" | "other";
@@ -16,13 +26,6 @@ interface Stems {
   keys?: string;
   strings?: string;
   other?: string;
-}
-
-interface ChordEvent {
-  bar: number;
-  beat: number;
-  chord: string;
-  duration: number; // in beats
 }
 
 interface Generation {
@@ -64,177 +67,17 @@ interface TrackState {
   isOriginal?: boolean;
 }
 
-// ─── BPM Detection ──────────────────────────────────────────────────────────
+
+// ─── BPM Detection (music-tempo ACF beat tracker) ────────────────────────────
 async function detectBPM(audioBuffer: AudioBuffer): Promise<number> {
   const data = audioBuffer.getChannelData(0);
-  const sampleRate = audioBuffer.sampleRate;
-  const windowSize = Math.floor(sampleRate * 0.01); // 10ms windows
-  const energies: number[] = [];
-
-  for (let i = 0; i < data.length - windowSize; i += windowSize) {
-    let energy = 0;
-    for (let j = 0; j < windowSize; j++) energy += data[i + j] ** 2;
-    energies.push(energy / windowSize);
-  }
-
-  // Compute autocorrelation for BPM range 60–200
-  const minLag = Math.floor((60 / 200) * (sampleRate / windowSize));
-  const maxLag = Math.floor((60 / 60) * (sampleRate / windowSize));
-  let bestCorr = -Infinity, bestLag = minLag;
-
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    let corr = 0;
-    for (let i = 0; i < energies.length - lag; i++) {
-      corr += energies[i] * energies[i + lag];
-    }
-    if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
-  }
-
-  const bpm = 60 / (bestLag * windowSize / sampleRate);
-  // Round to nearest 0.5
-  return Math.round(bpm * 2) / 2;
+  const mt = new MusicTempo(data, { sampleRate: audioBuffer.sampleRate });
+  let bpm = mt.tempo;
+  while (bpm > 180) bpm /= 2;
+  while (bpm < 60) bpm *= 2;
+  return Math.round(bpm * 2) / 2; // round to nearest 0.5
 }
 
-// ─── Key Detection via Chromagram ───────────────────────────────────────────
-const KEY_PROFILES = {
-  major: [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88],
-  minor: [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17],
-};
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-
-function detectKey(audioBuffer: AudioBuffer): string {
-  const data = audioBuffer.getChannelData(0);
-  const sampleRate = audioBuffer.sampleRate;
-  const fftSize = 4096;
-  const chroma = new Array(12).fill(0);
-
-  // Sample windows across the track
-  const step = Math.floor(data.length / 32);
-  for (let start = 0; start + fftSize < data.length; start += step) {
-    const slice = data.slice(start, start + fftSize);
-    // Simple DFT for chromagram (optimized subset)
-    for (let note = 0; note < 12; note++) {
-      // Map note to frequency bins
-      for (let octave = 2; octave <= 6; octave++) {
-        const freq = 261.63 * Math.pow(2, (note + (octave - 4) * 12) / 12);
-        const bin = Math.round((freq * fftSize) / sampleRate);
-        if (bin >= fftSize / 2) continue;
-        let real = 0, imag = 0;
-        for (let n = 0; n < Math.min(fftSize, 512); n++) {
-          const angle = (2 * Math.PI * bin * n) / fftSize;
-          real += slice[n] * Math.cos(angle);
-          imag -= slice[n] * Math.sin(angle);
-        }
-        chroma[note] += Math.sqrt(real * real + imag * imag);
-      }
-    }
-  }
-
-  // Normalize
-  const max = Math.max(...chroma);
-  const norm = chroma.map(v => v / max);
-
-  // Correlate against key profiles
-  let bestScore = -Infinity, bestKey = "C major";
-  for (let root = 0; root < 12; root++) {
-    for (const [mode, profile] of Object.entries(KEY_PROFILES)) {
-      let score = 0;
-      for (let i = 0; i < 12; i++) score += norm[(i + root) % 12] * profile[i];
-      if (score > bestScore) {
-        bestScore = score;
-        bestKey = `${NOTE_NAMES[root]} ${mode}`;
-      }
-    }
-  }
-  return bestKey;
-}
-
-// ─── Chord Detection from Chromagram ────────────────────────────────────────
-const CHORD_TEMPLATES: Record<string, number[]> = {
-  "maj":  [1,0,0,0,1,0,0,1,0,0,0,0],
-  "min":  [1,0,0,1,0,0,0,1,0,0,0,0],
-  "7":    [1,0,0,0,1,0,0,1,0,0,1,0],
-  "maj7": [1,0,0,0,1,0,0,1,0,0,0,1],
-  "min7": [1,0,0,1,0,0,0,1,0,0,1,0],
-  "sus2": [1,0,1,0,0,0,0,1,0,0,0,0],
-  "sus4": [1,0,0,0,0,1,0,1,0,0,0,0],
-  "dim":  [1,0,0,1,0,0,1,0,0,0,0,0],
-  "aug":  [1,0,0,0,1,0,0,0,1,0,0,0],
-};
-
-function detectChords(audioBuffer: AudioBuffer, bpm: number): ChordEvent[] {
-  const data = audioBuffer.getChannelData(0);
-  const sampleRate = audioBuffer.sampleRate;
-  const secondsPerBeat = 60 / bpm;
-  const samplesPerBeat = Math.floor(secondsPerBeat * sampleRate);
-  const totalBeats = Math.floor(data.length / samplesPerBeat);
-  const chords: ChordEvent[] = [];
-  let lastChord = "";
-  let chordStart = 0;
-  let chordDuration = 0;
-
-  for (let beat = 0; beat < totalBeats; beat++) {
-    const start = beat * samplesPerBeat;
-    const slice = data.slice(start, start + samplesPerBeat);
-    const fftSize = Math.min(2048, samplesPerBeat);
-
-    // Build chromagram for this beat
-    const chroma = new Array(12).fill(0);
-    for (let note = 0; note < 12; note++) {
-      for (let octave = 3; octave <= 5; octave++) {
-        const freq = 261.63 * Math.pow(2, (note + (octave - 4) * 12) / 12);
-        const bin = Math.round((freq * fftSize) / sampleRate);
-        if (bin >= fftSize / 2) continue;
-        let real = 0, imag = 0;
-        const limit = Math.min(fftSize, slice.length);
-        for (let n = 0; n < limit; n += 4) { // stride for speed
-          const angle = (2 * Math.PI * bin * n) / fftSize;
-          real += slice[n] * Math.cos(angle);
-          imag -= slice[n] * Math.sin(angle);
-        }
-        chroma[note] += Math.sqrt(real * real + imag * imag);
-      }
-    }
-
-    const max = Math.max(...chroma, 0.001);
-    const norm = chroma.map(v => v / max);
-
-    // Match to chord template
-    let bestScore = -Infinity, bestChord = "N/C";
-    for (let root = 0; root < 12; root++) {
-      for (const [type, template] of Object.entries(CHORD_TEMPLATES)) {
-        let score = 0;
-        for (let i = 0; i < 12; i++) score += norm[(i + root) % 12] * template[i];
-        if (score > bestScore) {
-          bestScore = score;
-          const suffix = type === "maj" ? "" : type === "min" ? "m" : type;
-          bestChord = `${NOTE_NAMES[root]}${suffix}`;
-        }
-      }
-    }
-
-    const bar = Math.floor(beat / 4);
-    const beatInBar = beat % 4;
-
-    if (bestChord !== lastChord) {
-      if (lastChord && chordDuration > 0) {
-        chords.push({ bar: chordStart, beat: 0, chord: lastChord, duration: chordDuration });
-      }
-      lastChord = bestChord;
-      chordStart = bar;
-      chordDuration = 1;
-    } else {
-      chordDuration++;
-    }
-  }
-
-  if (lastChord && chordDuration > 0) {
-    chords.push({ bar: chordStart, beat: 0, chord: lastChord, duration: chordDuration });
-  }
-
-  // Merge very short chords (< 2 beats) into neighbors
-  return chords.filter((c, i) => c.duration >= 2 || i === 0).slice(0, 64);
-}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function MixPage() {
@@ -258,6 +101,7 @@ export default function MixPage() {
   const [editingChords, setEditingChords] = useState(false);
   const [analysisReady, setAnalysisReady] = useState(false);
   const [analysisDoing, setAnalysisDoing] = useState(false);
+  const [transposeOffset, setTransposeOffset] = useState(0);
   const [autoAnalyze, setAutoAnalyze] = useState(false);
 
   const [tracks, setTracks] = useState<TrackState[]>([]);
@@ -419,7 +263,7 @@ export default function MixPage() {
 
       const detectedBpm = await detectBPM(audioBuf);
       const detectedKeyStr = detectKey(audioBuf);
-      const detectedChords = detectChords(audioBuf, detectedBpm);
+      const detectedChords = detectChords(audioBuf, detectedBpm, detectedKeyStr);
 
       setBpm(detectedBpm);
       setDetectedKey(detectedKeyStr);
@@ -876,14 +720,44 @@ export default function MixPage() {
       {generation?.status === "completed" && (
         <div className="max-w-5xl mx-auto px-4 mt-8">
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-            <div className="flex items-center justify-between mb-4">
+            {/* Header row */}
+            <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
               <div>
                 <h2 className="text-lg font-bold">🎼 Chord Chart</h2>
                 {detectedKey && (
-                  <p className="text-sm text-gray-400 mt-0.5">Key: {detectedKey}</p>
+                  <p className="text-sm text-gray-400 mt-0.5">
+                    Key: {transposeOffset !== 0 ? transposeKey(detectedKey, transposeOffset) : detectedKey}
+                  </p>
                 )}
               </div>
-              <div className="flex gap-2">
+
+              {/* Transpose + actions */}
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Transpose stepper */}
+                {chords.length > 0 && (
+                  <div className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1">
+                    <span className="text-xs text-gray-400 mr-1">Transpose</span>
+                    <button
+                      onClick={() => setTransposeOffset(n => n - 1)}
+                      className="w-6 h-6 rounded hover:bg-gray-700 text-gray-300 text-sm font-bold"
+                    >−</button>
+                    <span className="text-xs font-mono text-white w-8 text-center">
+                      {transposeOffset > 0 ? `+${transposeOffset}` : transposeOffset === 0 ? "0" : transposeOffset}
+                    </span>
+                    <button
+                      onClick={() => setTransposeOffset(n => n + 1)}
+                      className="w-6 h-6 rounded hover:bg-gray-700 text-gray-300 text-sm font-bold"
+                    >+</button>
+                    {transposeOffset !== 0 && (
+                      <button
+                        onClick={() => setTransposeOffset(0)}
+                        className="text-xs text-gray-500 hover:text-white ml-1"
+                        title="Reset"
+                      >↺</button>
+                    )}
+                  </div>
+                )}
+
                 <button
                   onClick={() => setEditingChords(!editingChords)}
                   className="text-sm px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 transition"
@@ -907,29 +781,61 @@ export default function MixPage() {
               </div>
             </div>
 
+            {/* Function color legend */}
+            {chords.length > 0 && (
+              <div className="flex flex-wrap gap-3 mb-4 text-xs text-gray-400">
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block"/><span>Tonic</span></span>
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-yellow-500 inline-block"/><span>Subdominant</span></span>
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"/><span>Dominant</span></span>
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-gray-500 inline-block"/><span>Chromatic</span></span>
+              </div>
+            )}
+
             {/* Chart grid — 4 chords per row (bars) */}
             <div className="grid grid-cols-4 gap-2">
               {chords.map((c, idx) => {
-                // Highlight current bar
                 const isCurrent = bpm && playing && currentBar === c.bar + 1;
+                const displayChord = transposeOffset !== 0 ? transposeChord(c.chord, transposeOffset) : c.chord;
+                const displayKey = transposeOffset !== 0 ? transposeKey(detectedKey ?? "", transposeOffset) : (detectedKey ?? "");
+                const rn = c.romanNumeral
+                  ? (transposeOffset !== 0 ? getRomanNumeral(displayChord, displayKey) : c.romanNumeral)
+                  : "";
+                const fn = c.chordFunction ?? "chromatic";
+                const fnColor = fn === "tonic"
+                  ? "text-blue-400"
+                  : fn === "subdominant"
+                    ? "text-yellow-400"
+                    : fn === "dominant"
+                      ? "text-red-400"
+                      : "text-gray-500";
+                const borderColor = isCurrent
+                  ? "border-purple-500 bg-purple-900/40"
+                  : fn === "tonic"
+                    ? "border-blue-800 bg-blue-950/30"
+                    : fn === "subdominant"
+                      ? "border-yellow-800 bg-yellow-950/20"
+                      : fn === "dominant"
+                        ? "border-red-800 bg-red-950/20"
+                        : "border-gray-700 bg-gray-800/60";
                 return (
                   <div
                     key={idx}
-                    className={`rounded-lg border p-3 transition ${
-                      isCurrent
-                        ? "border-purple-500 bg-purple-900/40"
-                        : "border-gray-700 bg-gray-800/60"
-                    }`}
+                    className={`rounded-lg border p-3 transition ${borderColor}`}
                   >
-                    <div className="text-xs text-gray-500 mb-1">Bar {c.bar + 1}</div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-gray-500">Bar {c.bar + 1}</span>
+                      {rn && (
+                        <span className={`text-xs font-mono font-semibold ${fnColor}`}>{rn}</span>
+                      )}
+                    </div>
                     {editingChords ? (
                       <input
-                        value={c.chord}
+                        value={displayChord}
                         onChange={e => updateChord(idx, e.target.value)}
                         className="w-full bg-transparent text-white text-xl font-bold font-mono outline-none border-b border-purple-500"
                       />
                     ) : (
-                      <div className="text-xl font-bold font-mono text-white">{c.chord}</div>
+                      <div className="text-xl font-bold font-mono text-white">{displayChord}</div>
                     )}
                     <div className="text-xs text-gray-600 mt-1">{c.duration} beat{c.duration !== 1 ? "s" : ""}</div>
                   </div>
