@@ -45,6 +45,36 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
     return NextResponse.json(generation);
   }
 
+  // ─── MELODY / STYLE MODE (single fullmix prediction) ────────────────────
+  if (generation.mode === "melody" || generation.mode === "style" || generation.mode === "fullmix") {
+    const stemPredictions = (generation.stemPredictions ?? {}) as Record<string, string>;
+    const predId = stemPredictions["fullmix"];
+    if (!predId) return NextResponse.json(generation); // predictions not started yet
+
+    const res = await fetch(`https://api.replicate.com/v1/predictions/${predId}`, {
+      headers: { Authorization: `Token ${apiToken}` },
+    });
+    if (!res.ok) return NextResponse.json(generation);
+    const prediction = await res.json();
+
+    if (prediction.status === "succeeded" && prediction.output) {
+      const url = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+      const updated = await prisma.generation.update({
+        where: { id },
+        data: { stems: { fullmix: url }, status: "completed" },
+      });
+      return NextResponse.json(updated);
+    }
+    if (["failed", "canceled"].includes(prediction.status)) {
+      const updated = await prisma.generation.update({
+        where: { id },
+        data: { status: "failed" },
+      });
+      return NextResponse.json(updated);
+    }
+    return NextResponse.json(generation);
+  }
+
   // ─── GENERATE MODE: hybrid — webhook-driven but with Replicate fallback poll ─
   const stemPredictions = (generation.stemPredictions ?? {}) as Record<string, string>;
   const currentStems = (generation.stems ?? {}) as Record<string, string>;

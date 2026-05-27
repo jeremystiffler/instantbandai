@@ -20,10 +20,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
-  // Find all in-progress generate-mode generations
+  // Find all in-progress generative generations (all non-separate modes)
   const processing = await prisma.generation.findMany({
-    where: { status: "processing", mode: "generate" },
-    select: { id: true, stemPredictions: true, stems: true },
+    where: { status: "processing", mode: { in: ["generate", "melody", "style", "fullmix", "loops"] } },
+    select: { id: true, stemPredictions: true, stems: true, mode: true },
   });
 
   // Find which generation owns this prediction

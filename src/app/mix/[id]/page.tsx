@@ -328,6 +328,12 @@ export default function MixPage() {
 
   // ── Build track list ─────────────────────────────────────────────────────
   function buildTracks(stems: Stems, sourceUrl: string, extraStemsArr: string[] = []) {
+    // Melody / Style mode — single fullmix output
+    if ((stems as Record<string, string>).fullmix) {
+      return [
+        { id: "fullmix", label: "Full Mix", emoji: "🎼", color: "#6366f1", url: (stems as Record<string, string>).fullmix, volume: 90, muted: false, soloed: false },
+      ];
+    }
     const EXTRA_COLORS = ["#f43f5e","#fb923c","#facc15","#34d399","#22d3ee","#a78bfa","#f472b6","#94a3b8","#c084fc","#4ade80"];
     const list: TrackState[] = [
       { id: "drums",    label: "Drums",    emoji: "🥁", color: "#ef4444", url: stems.drums    ?? null, volume: 80, muted: false, soloed: false },
