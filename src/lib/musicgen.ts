@@ -6,8 +6,9 @@
  *  "fullmix" — ACE-Step: full stereo song from text prompt, 30–60s.
  */
 
+// ryan5453/demucs — htdemucs_6s stem separator
 export const DEMUCS_VERSION =
-  "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
+  "5a7041cc9b82e5a558fea6b3d7b12dea89625e89da33f0447bd727c2d0ab9e77";
 
 // MusicGen — melody-conditioned orchestration (primary "Orchestrate" mode)
 // stereo-melody-large: feeds your melody audio in, outputs full arrangement following it
