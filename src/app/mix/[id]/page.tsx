@@ -330,9 +330,11 @@ export default function MixPage() {
   function buildTracks(stems: Stems, sourceUrl: string, extraStemsArr: string[] = []) {
     // Melody / Style mode — single fullmix output
     if ((stems as Record<string, string>).fullmix) {
-      return [
+      const tracksArr = [
         { id: "fullmix", label: "Full Mix", emoji: "🎼", color: "#6366f1", url: (stems as Record<string, string>).fullmix, volume: 90, muted: false, soloed: false },
       ];
+      setTracks(tracksArr);
+      return;
     }
     const EXTRA_COLORS = ["#f43f5e","#fb923c","#facc15","#34d399","#22d3ee","#a78bfa","#f472b6","#94a3b8","#c084fc","#4ade80"];
     const list: TrackState[] = [

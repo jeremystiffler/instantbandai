@@ -290,15 +290,26 @@ function sliderLabel(val: number) {
             {/* BPM + Key controls */}
             {(mode === "melody" || mode === "style" || mode === "loops") && (
               <div className="flex flex-col items-center gap-3 mt-3">
-                {/* BPM row */}
+                {/* BPM row — manual entry with optional auto-detect */}
                 <div className="flex items-center justify-center gap-2">
-                  {analyzing ? (
-                    <span className="text-xs text-white/30 animate-pulse">🎵 Detecting BPM…</span>
-                  ) : detectedBpm ? (
-                    <span className="px-2.5 py-1 rounded-full bg-violet-900/60 border border-violet-500/40 text-violet-200 text-xs font-medium">
-                      🥁 {detectedBpm} BPM
-                    </span>
-                  ) : null}
+                  <label className="text-white/40 text-xs font-medium">BPM:</label>
+                  <input
+                    type="number"
+                    min={40} max={250}
+                    value={detectedBpm ?? ""}
+                    onChange={e => { e.stopPropagation(); const v = parseInt(e.target.value); setDetectedBpm(isNaN(v) ? null : v); }}
+                    onClick={e => e.stopPropagation()}
+                    placeholder="e.g. 120"
+                    className="w-20 bg-zinc-900 border border-white/10 rounded-lg text-white/80 text-xs px-2.5 py-1.5 text-center focus:outline-none focus:border-violet-500/60"
+                  />
+                  <span className="text-white/30 text-xs">BPM</span>
+                  <button
+                    onClick={e => { e.stopPropagation(); if (file) analyzeFile(file); }}
+                    disabled={analyzing}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-zinc-800 border border-white/10 text-white/50 hover:text-white/80 hover:border-violet-500/40 disabled:opacity-40 transition"
+                  >
+                    {analyzing ? "🎵 Detecting…" : "Auto-detect"}
+                  </button>
                 </div>
                 {/* Key selector */}
                 <div className="flex items-center gap-2">
