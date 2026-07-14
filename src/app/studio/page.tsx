@@ -133,9 +133,12 @@ export default function StudioPage() {
   const [sourceDuration, setSourceDuration] = useState<number | null>(null);
   const [melodyNotes, setMelodyNotes] = useState<MelodyNote[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [previewTime, setPreviewTime] = useState(0);
+  const [previewPlaying, setPreviewPlaying] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -146,6 +149,8 @@ export default function StudioPage() {
 
     const url = URL.createObjectURL(file);
     setPreviewUrl(url);
+    setPreviewTime(0);
+    setPreviewPlaying(false);
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
@@ -338,6 +343,31 @@ function sliderLabel(val: number) {
   const melodyPitchRange = enabledNotes.length
     ? `${midiToNoteName(Math.min(...enabledNotes.map((n) => n.midi)))}–${midiToNoteName(Math.max(...enabledNotes.map((n) => n.midi)))}`
     : "—";
+  const previewDuration = sourceDuration ?? previewAudioRef.current?.duration ?? 0;
+  const playheadPercent = previewDuration > 0 ? Math.max(0, Math.min(100, (previewTime / previewDuration) * 100)) : 0;
+  const activeNoteIds = new Set(
+    melodyNotes
+      .filter((n) => n.enabled && previewTime >= n.start && previewTime <= n.end)
+      .map((n) => n.id)
+  );
+
+  function syncPreviewMetadata() {
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      setSourceDuration((current) => current ?? audio.duration);
+    }
+    setPreviewTime(audio.currentTime || 0);
+  }
+
+  function seekPreviewFromTimeline(e: React.MouseEvent<HTMLDivElement>) {
+    const audio = previewAudioRef.current;
+    if (!audio || !previewDuration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    audio.currentTime = pct * previewDuration;
+    setPreviewTime(audio.currentTime);
+  }
 
   function toggleMelodyNote(id: string) {
     setMelodyNotes((prev) => prev.map((n) => n.id === id ? { ...n, enabled: !n.enabled } : n));
@@ -487,7 +517,19 @@ function sliderLabel(val: number) {
                   <span className="text-xs font-semibold uppercase tracking-[0.18em] text-white/35">Preview recording</span>
                   <span className="text-xs text-white/30">Listen before generating</span>
                 </div>
-                <audio controls src={previewUrl} className="w-full" preload="metadata">
+                <audio
+                  ref={previewAudioRef}
+                  controls
+                  src={previewUrl}
+                  className="w-full"
+                  preload="metadata"
+                  onLoadedMetadata={syncPreviewMetadata}
+                  onDurationChange={syncPreviewMetadata}
+                  onTimeUpdate={(e) => setPreviewTime(e.currentTarget.currentTime || 0)}
+                  onPlay={() => setPreviewPlaying(true)}
+                  onPause={() => setPreviewPlaying(false)}
+                  onEnded={(e) => { setPreviewPlaying(false); setPreviewTime(e.currentTarget.duration || 0); }}
+                >
                   Your browser does not support audio playback.
                 </audio>
               </div>
@@ -569,37 +611,60 @@ function sliderLabel(val: number) {
 
                 {melodyNotes.length > 0 && (
                   <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                    <div className="relative h-14 rounded-lg bg-zinc-950/80 border border-white/5 overflow-hidden">
+                    <div className="flex items-center justify-between px-1 text-[11px] font-mono text-white/35">
+                      <span>{previewPlaying ? "▶" : "Ⅱ"} {fmtSeconds(previewTime)}</span>
+                      <span>{previewDuration ? fmtSeconds(previewDuration) : "—"}</span>
+                    </div>
+                    <div
+                      className="relative h-14 rounded-lg bg-zinc-950/80 border border-white/5 overflow-hidden cursor-crosshair"
+                      onClick={seekPreviewFromTimeline}
+                      title="Click to seek the original audio preview"
+                    >
                       {melodyNotes.map((note) => {
-                        const left = sourceDuration ? Math.max(0, Math.min(100, (note.start / sourceDuration) * 100)) : 0;
-                        const width = sourceDuration ? Math.max(1.5, Math.min(100 - left, (note.duration / sourceDuration) * 100)) : 2;
+                        const left = previewDuration ? Math.max(0, Math.min(100, (note.start / previewDuration) * 100)) : 0;
+                        const width = previewDuration ? Math.max(1.5, Math.min(100 - left, (note.duration / previewDuration) * 100)) : 2;
                         const top = 8 + (1 - ((note.midi - Math.min(...melodyNotes.map((n) => n.midi))) / Math.max(1, Math.max(...melodyNotes.map((n) => n.midi)) - Math.min(...melodyNotes.map((n) => n.midi))))) * 32;
+                        const isActive = activeNoteIds.has(note.id);
                         return (
                           <button
                             key={note.id}
                             type="button"
                             title={`${note.note} @ ${fmtSeconds(note.start)}`}
-                            onClick={() => toggleMelodyNote(note.id)}
-                            className={`absolute rounded-sm border transition ${note.enabled ? "bg-violet-400/80 border-violet-200/60" : "bg-white/10 border-white/15 opacity-40"}`}
+                            onClick={(e) => { e.stopPropagation(); toggleMelodyNote(note.id); }}
+                            className={`absolute rounded-sm border transition ${
+                              isActive
+                                ? "bg-emerald-300 border-white shadow-[0_0_12px_rgba(110,231,183,0.85)]"
+                                : note.enabled
+                                ? "bg-violet-400/80 border-violet-200/60"
+                                : "bg-white/10 border-white/15 opacity-40"
+                            }`}
                             style={{ left: `${left}%`, width: `${width}%`, top: `${top}px`, height: "10px" }}
                           />
                         );
                       })}
+                      <div
+                        className="pointer-events-none absolute inset-y-0 z-20 w-px bg-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.95)]"
+                        style={{ left: `${playheadPercent}%` }}
+                      >
+                        <div className="absolute -left-1 -top-0.5 h-2 w-2 rounded-full bg-emerald-200" />
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 text-xs text-white/35 px-1">
                       <span>Note</span><span>Start</span><span>Length</span><span />
                     </div>
-                    {melodyNotes.map((note) => (
-                      <div key={note.id} className={`grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 rounded-lg border px-2 py-1.5 ${note.enabled ? "bg-white/5 border-white/10" : "bg-white/[0.02] border-white/5 opacity-55"}`}>
-                        <button type="button" onClick={() => toggleMelodyNote(note.id)} className="text-left font-mono text-sm text-white/80 hover:text-violet-200">
-                          {note.enabled ? "■" : "□"} {note.note}
+                    {melodyNotes.map((note) => {
+                      const isActive = activeNoteIds.has(note.id);
+                      return (
+                      <div key={note.id} className={`grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 rounded-lg border px-2 py-1.5 ${isActive ? "bg-emerald-400/15 border-emerald-300/50" : note.enabled ? "bg-white/5 border-white/10" : "bg-white/[0.02] border-white/5 opacity-55"}`}>
+                        <button type="button" onClick={() => toggleMelodyNote(note.id)} className={`text-left font-mono text-sm hover:text-violet-200 ${isActive ? "text-emerald-200" : "text-white/80"}`}>
+                          {isActive ? "▶" : note.enabled ? "■" : "□"} {note.note}
                         </button>
                         <span className="font-mono text-white/45">{fmtSeconds(note.start)}</span>
                         <span className="font-mono text-white/45">{fmtSeconds(note.duration)}</span>
                         <button type="button" onClick={() => removeMelodyNote(note.id)} className="text-white/30 hover:text-red-300 px-1">✕</button>
                       </div>
-                    ))}
+                    );})}
                   </div>
                 )}
               </div>
