@@ -59,12 +59,19 @@ function tempoQuantizeMelodyNotes(
   sourceDuration: number,
 ) {
   const beatSeconds = 60 / Math.max(40, Math.min(240, bpm || 120));
-  // Use a 16th-note grid as the first musical "pixel." This keeps the map
-  // responsive, but prevents millisecond-sized note confetti from Basic Pitch.
+  // Use a 16th-note grid as the first musical "pixel," then prune anything
+  // too quiet/short to be a useful musical event. This keeps fast real notes,
+  // but cuts the sparkle-dust artifacts that Basic Pitch can hallucinate.
   const gridSeconds = beatSeconds / 4;
-  const mergeGapSeconds = gridSeconds * 0.75;
+  const mergeGapSeconds = gridSeconds;
+  const velocities = rawNotes.map((n) => n.velocity).sort((a, b) => a - b);
+  const dynamicVelocityFloor = velocities.length
+    ? velocities[Math.floor(velocities.length * 0.35)]
+    : 0;
+  const velocityFloor = Math.max(0.14, dynamicVelocityFloor * 0.85);
 
   const quantized = rawNotes
+    .filter((n) => n.velocity >= velocityFloor)
     .map((n) => {
       const start = Math.max(0, Math.round(n.start / gridSeconds) * gridSeconds);
       const rawEnd = Math.max(n.end, n.start + gridSeconds);
@@ -74,7 +81,7 @@ function tempoQuantizeMelodyNotes(
       );
       return { ...n, start, end, duration: end - start };
     })
-    .filter((n) => n.duration >= gridSeconds * 0.75)
+    .filter((n) => n.duration >= gridSeconds)
     .sort((a, b) => a.start - b.start || a.midi - b.midi);
 
   const merged: Array<Omit<MelodyNote, "id" | "note" | "enabled">> = [];
@@ -89,9 +96,24 @@ function tempoQuantizeMelodyNotes(
     }
   }
 
-  return merged
+  const byStartBucket = new Map<number, Array<Omit<MelodyNote, "id" | "note" | "enabled">>>();
+  for (const note of merged) {
+    const bucket = Math.round(note.start / gridSeconds);
+    byStartBucket.set(bucket, [...(byStartBucket.get(bucket) ?? []), note]);
+  }
+
+  const cleaned = Array.from(byStartBucket.values()).flatMap((bucketNotes) =>
+    bucketNotes
+      .sort((a, b) => b.velocity - a.velocity || b.duration - a.duration)
+      // Keep chord support, but cap impossible/junky note clusters.
+      .slice(0, 4)
+      // One-grid blips must be confident; otherwise they're probably artifacts.
+      .filter((n) => n.duration > gridSeconds || n.velocity >= velocityFloor * 1.4)
+  );
+
+  return cleaned
     .sort((a, b) => a.start - b.start || a.midi - b.midi)
-    .slice(0, 160)
+    .slice(0, 120)
     .map((n, index) => ({
       id: `${index}-${Math.round(n.start * 1000)}-${n.midi}`,
       midi: n.midi,
@@ -254,7 +276,7 @@ export default function StudioPage() {
         const rawNotes = noteFramesToTime(
           addPitchBendsToNoteEvents(
             contours,
-            outputToNotesPoly(frames, onsets, 0.25, 0.25, 5)
+            outputToNotesPoly(frames, onsets, 0.36, 0.32, 8)
           )
         )
           .filter((n) => n.durationSeconds >= 0.03)
@@ -633,7 +655,7 @@ function sliderLabel(val: number) {
                       {analyzing
                         ? `Listening for notes${analysisProgress ? `… ${analysisProgress}%` : "…"}`
                         : melodyNotes.length
-                        ? `${enabledNotes.length}/${melodyNotes.length} notes active · A440 snapped · tempo-quantized · range ${melodyPitchRange} · source ${sourceDuration ? fmtSeconds(sourceDuration) : "—"}`
+                        ? `${enabledNotes.length}/${melodyNotes.length} notes active · A440 snapped · tempo-quantized · artifact-filtered · range ${melodyPitchRange} · source ${sourceDuration ? fmtSeconds(sourceDuration) : "—"}`
                         : "Upload or record audio to detect A440-snapped, tempo-quantized notes. Click notes to mute; ✕ deletes wrong notes."}
                     </p>
                   </div>
