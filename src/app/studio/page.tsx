@@ -53,6 +53,57 @@ function clampVelocity(v: number) {
   return Math.max(1, Math.min(127, Math.round(v)));
 }
 
+function tempoQuantizeMelodyNotes(
+  rawNotes: Array<Omit<MelodyNote, "id" | "note" | "enabled">>,
+  bpm: number,
+  sourceDuration: number,
+) {
+  const beatSeconds = 60 / Math.max(40, Math.min(240, bpm || 120));
+  // Use a 16th-note grid as the first musical "pixel." This keeps the map
+  // responsive, but prevents millisecond-sized note confetti from Basic Pitch.
+  const gridSeconds = beatSeconds / 4;
+  const mergeGapSeconds = gridSeconds * 0.75;
+
+  const quantized = rawNotes
+    .map((n) => {
+      const start = Math.max(0, Math.round(n.start / gridSeconds) * gridSeconds);
+      const rawEnd = Math.max(n.end, n.start + gridSeconds);
+      const end = Math.min(
+        sourceDuration,
+        Math.max(start + gridSeconds, Math.round(rawEnd / gridSeconds) * gridSeconds)
+      );
+      return { ...n, start, end, duration: end - start };
+    })
+    .filter((n) => n.duration >= gridSeconds * 0.75)
+    .sort((a, b) => a.start - b.start || a.midi - b.midi);
+
+  const merged: Array<Omit<MelodyNote, "id" | "note" | "enabled">> = [];
+  for (const note of quantized) {
+    const lastSamePitch = merged.findLast((candidate) => candidate.midi === note.midi);
+    if (lastSamePitch && note.start <= lastSamePitch.end + mergeGapSeconds) {
+      lastSamePitch.end = Math.max(lastSamePitch.end, note.end);
+      lastSamePitch.duration = lastSamePitch.end - lastSamePitch.start;
+      lastSamePitch.velocity = Math.max(lastSamePitch.velocity, note.velocity);
+    } else {
+      merged.push({ ...note });
+    }
+  }
+
+  return merged
+    .sort((a, b) => a.start - b.start || a.midi - b.midi)
+    .slice(0, 160)
+    .map((n, index) => ({
+      id: `${index}-${Math.round(n.start * 1000)}-${n.midi}`,
+      midi: n.midi,
+      note: midiToNoteName(n.midi),
+      start: n.start,
+      duration: n.duration,
+      end: n.end,
+      velocity: n.velocity,
+      enabled: true,
+    }));
+}
+
 function writeVarLen(value: number) {
   const bytes = [value & 0x7f];
   value >>= 7;
@@ -200,28 +251,25 @@ export default function StudioPage() {
           (p: number) => setAnalysisProgress(Math.round(p * 100))
         );
 
-        const notes = noteFramesToTime(
+        const rawNotes = noteFramesToTime(
           addPitchBendsToNoteEvents(
             contours,
             outputToNotesPoly(frames, onsets, 0.25, 0.25, 5)
           )
         )
-          .filter((n) => n.durationSeconds >= 0.05)
-          .slice(0, 160)
-          .map((n, index) => {
+          .filter((n) => n.durationSeconds >= 0.03)
+          .slice(0, 260)
+          .map((n) => {
             const tunedMidi = snapMidiToA440Semitone(n.pitchMidi);
             return {
-              id: `${index}-${Math.round(n.startTimeSeconds * 1000)}-${tunedMidi}`,
               midi: tunedMidi,
-              note: midiToNoteName(tunedMidi),
               start: n.startTimeSeconds,
               duration: n.durationSeconds,
               end: n.startTimeSeconds + n.durationSeconds,
               velocity: n.amplitude,
-              enabled: true,
             };
           });
-        setMelodyNotes(notes);
+        setMelodyNotes(tempoQuantizeMelodyNotes(rawNotes, Math.round(bpm), audioBuf.duration));
       }
       await ctx.close();
     } catch (e) {
@@ -585,8 +633,8 @@ function sliderLabel(val: number) {
                       {analyzing
                         ? `Listening for notes${analysisProgress ? `… ${analysisProgress}%` : "…"}`
                         : melodyNotes.length
-                        ? `${enabledNotes.length}/${melodyNotes.length} notes active · A440 snapped · range ${melodyPitchRange} · source ${sourceDuration ? fmtSeconds(sourceDuration) : "—"}`
-                        : "Upload or record audio to detect A440-snapped notes. Click notes to mute; ✕ deletes wrong notes."}
+                        ? `${enabledNotes.length}/${melodyNotes.length} notes active · A440 snapped · tempo-quantized · range ${melodyPitchRange} · source ${sourceDuration ? fmtSeconds(sourceDuration) : "—"}`
+                        : "Upload or record audio to detect A440-snapped, tempo-quantized notes. Click notes to mute; ✕ deletes wrong notes."}
                     </p>
                   </div>
                   <div className="flex gap-2">
