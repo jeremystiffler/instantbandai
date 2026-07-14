@@ -1,6 +1,6 @@
 "use client";
 import { useSession } from "next-auth/react";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { EXTRA_INSTRUMENT_OPTIONS, VARIANT_LABELS } from "@/lib/musicgen";
 import { AuthBox } from "@/components/auth-box";
@@ -26,6 +26,7 @@ const DEFAULT_SLIDERS: Record<GenerateStem, number> = {
 export default function StudioPage() {
   const { data: session, status } = useSession();
   const [file, setFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
   const [error, setError] = useState("");
@@ -45,6 +46,17 @@ export default function StudioPage() {
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const router = useRouter();
+
+  useEffect(() => {
+    if (!file) {
+      setPreviewUrl("");
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
   // ── BPM detection via music-tempo (ACF beat tracker, ~200ms) ──────────────
   const analyzeFile = useCallback(async (f: File) => {
@@ -99,7 +111,9 @@ export default function StudioPage() {
       mr.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: mimeType });
         const ext = mimeType.includes("webm") ? "webm" : "ogg";
-        setFile(new File([blob], `recording.${ext}`, { type: mimeType }));
+        const recordedFile = new File([blob], `recording.${ext}`, { type: mimeType });
+        setFile(recordedFile);
+        analyzeFile(recordedFile);
         stream.getTracks().forEach(t => t.stop());
       };
       mr.start(250);
@@ -290,6 +304,17 @@ function sliderLabel(val: number) {
           <div>
             <p className="text-violet-400 font-medium text-lg">✓ {file.name}</p>
             <p className="text-white/40 text-sm mt-1">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+            {previewUrl && (
+              <div className="mt-4 rounded-xl border border-white/10 bg-black/25 p-3" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-white/35">Preview recording</span>
+                  <span className="text-xs text-white/30">Listen before generating</span>
+                </div>
+                <audio controls src={previewUrl} className="w-full" preload="metadata">
+                  Your browser does not support audio playback.
+                </audio>
+              </div>
+            )}
             {/* BPM + Key controls */}
             {(mode === "melody" || mode === "style" || mode === "loops") && (
               <div className="flex flex-col items-center gap-3 mt-3">
