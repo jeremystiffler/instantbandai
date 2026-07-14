@@ -75,3 +75,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   return NextResponse.json({ project });
 }
+
+export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const user = await getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await ensureProjectSchema();
+
+  const { id } = await params;
+  const existing = await prisma.project.findFirst({ where: { id, userId: user.id }, select: { id: true } });
+  if (!existing) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
+  await prisma.project.delete({ where: { id } });
+  return NextResponse.json({ ok: true });
+}

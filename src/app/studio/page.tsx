@@ -269,6 +269,7 @@ export default function StudioPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoSaveInFlightRef = useRef(false);
   const [previewTime, setPreviewTime] = useState(0);
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const router = useRouter();
@@ -470,6 +471,23 @@ export default function StudioPage() {
     }
   }
 
+  async function deleteProject(id: string, name: string) {
+    const ok = window.confirm(`Delete project "${name}"? This removes it from your Projects list, but does not delete finished renders.`);
+    if (!ok) return;
+    setError("");
+    setSaveStatus("Deleting project…");
+    const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setError(err.error || "Could not delete project.");
+      setSaveStatus("");
+      return;
+    }
+    await loadProjectList();
+    if (projectId === id) startNewProject();
+    else setSaveStatus("Project deleted");
+  }
+
   useEffect(() => {
     if (status !== "authenticated") return;
     loadProjectList();
@@ -619,6 +637,31 @@ function sliderLabel(val: number) {
   const audioName = file?.name || uploadedMeta?.name || "Saved audio";
   const audioSize = file?.size ?? uploadedMeta?.size ?? null;
   const audioPreviewSrc = previewUrl || uploadedUrl || "";
+
+  useEffect(() => {
+    if (status !== "authenticated" || !hasAudio || !dirty || savingProject || loading || analyzing || recording) return;
+    const timer = setTimeout(async () => {
+      if (autoSaveInFlightRef.current) return;
+      autoSaveInFlightRef.current = true;
+      setSaveStatus("Auto-saving…");
+      try {
+        const uploaded = await uploadCurrentFile();
+        const savedProject = await persistCurrentProject(uploaded);
+        await loadProjectList();
+        const url = new URL(window.location.href);
+        url.searchParams.set("project", savedProject.id);
+        window.history.replaceState(null, "", url.toString());
+        setSaveStatus("Auto-saved");
+      } catch (e) {
+        console.error("Auto-save failed", e);
+        setSaveStatus("Auto-save failed");
+      } finally {
+        autoSaveInFlightRef.current = false;
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, hasAudio, dirty, savingProject, loading, analyzing, recording, projectName, uploadedUrl, detectedBpm, manualKey, sourceDuration, mode, stylePrompt, melodyNotes, sliders, extraStems]);
 
   const workflowOptions: Array<{ id: StudioMode; label: string; color: string; help: string }> = [
     { id: "melody", label: "🎼 Producer Arrangement", color: "violet", help: "Use the uploaded audio + MIDI as the melody guide for a full-band arrangement." },
@@ -787,15 +830,27 @@ function sliderLabel(val: number) {
         {projectsOpen && (
           <div className="mt-3 max-h-56 overflow-y-auto rounded-lg border border-white/10 bg-black/30">
             {projects.length ? projects.map((project) => (
-              <button
+              <div
                 key={project.id}
-                type="button"
-                onClick={() => loadProject(project.id).catch((e) => setError(e instanceof Error ? e.message : "Could not load project."))}
-                className="block w-full border-b border-white/5 px-3 py-2 text-left last:border-b-0 hover:bg-white/5"
+                className="flex items-center gap-2 border-b border-white/5 px-3 py-2 last:border-b-0 hover:bg-white/5"
               >
-                <span className="block text-sm font-medium text-white/75">{project.name}</span>
-                <span className="block text-xs text-white/35">{project.audioName || "Saved audio"} · {project.bpm ? `${Math.round(project.bpm)} BPM` : "BPM —"} · {project.key || "key —"}</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => loadProject(project.id).catch((e) => setError(e instanceof Error ? e.message : "Could not load project."))}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <span className="block truncate text-sm font-medium text-white/75">{project.name}</span>
+                  <span className="block truncate text-xs text-white/35">{project.audioName || "Saved audio"} · {project.bpm ? `${Math.round(project.bpm)} BPM` : "BPM —"} · {project.key || "key —"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteProject(project.id, project.name)}
+                  className="rounded-md border border-red-400/20 bg-red-500/10 px-2 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/20"
+                  title="Delete project"
+                >
+                  Delete
+                </button>
+              </div>
             )) : (
               <p className="px-3 py-3 text-sm text-white/35">No saved projects yet.</p>
             )}
