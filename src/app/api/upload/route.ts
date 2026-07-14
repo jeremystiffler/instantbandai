@@ -15,9 +15,17 @@ export async function POST(req: Request) {
     const file = formData.get("file") as File | null;
     if (!file) return NextResponse.json({ error: "No file provided" }, { status: 400 });
 
+    if (!file.type.startsWith("audio/")) {
+      return NextResponse.json({ error: "Please upload an audio file" }, { status: 400 });
+    }
+    if (file.size > 256 * 1024 * 1024) {
+      return NextResponse.json({ error: "File too large (max 256MB)" }, { status: 400 });
+    }
+
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    const key = `uploads/${crypto.randomUUID()}-${file.name}`;
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120);
+    const key = `uploads/${crypto.randomUUID()}-${safeName}`;
     await uploadBuffer(key, buffer, file.type || "audio/webm");
     const publicUrl = getPublicUrl(key);
     return NextResponse.json({ key, publicUrl });

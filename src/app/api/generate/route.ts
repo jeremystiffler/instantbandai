@@ -26,13 +26,13 @@ export async function POST(req: Request) {
   const {
     key,
     sourceUrl: providedSourceUrl,
-    mode = "melody",        // "melody" | "style" | "loops" | "separate"
+    mode = "melody",        // flagship: "melody". Utility/experimental: "style" | "loops" | "separate"
     sliders = {},
     extraStems = [],
     bpm,
     musicKey,
-    duration = 30,
-    stylePrompt = "cinematic orchestral worship arrangement, strings, piano, choir, full band",
+    duration = 45,
+    stylePrompt = "radio-ready full-band arrangement, preserve the original melody and phrasing, tasteful drums, bass, piano, guitars, warm pads, natural dynamics, high-quality studio production",
   } = await req.json();
 
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
@@ -83,7 +83,7 @@ export async function POST(req: Request) {
   }
 
   // ─── MELODY MODE (MusicGen stereo-melody-large) ──────────────────────────
-  // Uploads your melody audio → outputs full orchestrated arrangement following your melody.
+  // Uploads a rough vocal/piano/guitar/demo → outputs the highest-quality current full-band arrangement path.
   if (mode === "melody") {
     const input = buildMelodyOrchestrationInput(sourceUrl, stylePrompt, bpm, musicKey, duration);
     const generation = await prisma.generation.create({

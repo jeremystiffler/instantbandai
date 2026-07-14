@@ -219,8 +219,8 @@ export function getDiatonicChords(keyStr: string): string[] {
   const parsed = parseKey(keyStr);
   if (!parsed) return [];
   try {
-    if (parsed.mode === "major") return Key.majorKey(parsed.root).chords ?? [];
-    return Key.minorKey(parsed.root).natural.chords ?? [];
+    if (parsed.mode === "major") return [...(Key.majorKey(parsed.root).chords ?? [])];
+    return [...(Key.minorKey(parsed.root).natural.chords ?? [])];
   } catch { return []; }
 }
 

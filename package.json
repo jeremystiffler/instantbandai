@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000} prisma generate && NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000} next build",
     "start": "next start"
   },
   "dependencies": {
@@ -15,16 +15,13 @@
     "@spotify/basic-pitch": "^1.0.1",
     "@tonaljs/tonal": "^4.10.0",
     "dotenv": "^17.4.2",
-    "inngest": "^4.4.0",
     "music-tempo": "^1.0.3",
     "next": "16.2.6",
     "next-auth": "^4.24.14",
     "prisma": "^5.22.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "replicate": "^1.4.0",
-    "stripe": "^22.1.1",
-    "uploadthing": "^7.7.4"
+    "replicate": "^1.4.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

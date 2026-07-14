@@ -2,12 +2,9 @@
 import { useSession, signIn } from "next-auth/react";
 import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { genUploader } from "uploadthing/client";
 import { EXTRA_INSTRUMENT_OPTIONS, VARIANT_LABELS } from "@/lib/musicgen";
 // Pre-import music-tempo so it's ready when the user drops a file
 import MusicTempo from "music-tempo";
-
-const { uploadFiles } = genUploader({ url: "/api/uploadthing" });
 
 const GENERATE_STEMS = ["drums", "bass", "guitar", "keys", "strings", "other"] as const;
 type GenerateStem = (typeof GENERATE_STEMS)[number];
@@ -28,7 +25,6 @@ const DEFAULT_SLIDERS: Record<GenerateStem, number> = {
 export default function StudioPage() {
   const { data: session, status } = useSession();
   const [file, setFile] = useState<File | null>(null);
-  const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
   const [error, setError] = useState("");
@@ -36,7 +32,7 @@ export default function StudioPage() {
   const [recording, setRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [mode, setMode] = useState<"separate" | "melody" | "style" | "loops">("melody");
-  const [stylePrompt, setStylePrompt] = useState("cinematic orchestral worship arrangement, strings, piano, choir, full band");
+  const [stylePrompt, setStylePrompt] = useState("radio-ready full-band arrangement, preserve the original melody and phrasing, tasteful drums, bass, piano, guitars, warm pads, natural dynamics, high-quality studio production");
   const [sliders, setSliders] = useState<Record<GenerateStem, number>>({ ...DEFAULT_SLIDERS });
   const [extraStems, setExtraStems] = useState<string[]>([]);
   const [variantPickerOpen, setVariantPickerOpen] = useState<string | null>(null);
@@ -133,9 +129,14 @@ function sliderLabel(val: number) {
     setError("");
     try {
       setLoadingMsg("Uploading audio…");
-      const [res] = await uploadFiles("audioUploader", { files: [file] });
-      const publicUrl = res.url;
-      const key = res.key;
+      const uploadForm = new FormData();
+      uploadForm.append("file", file);
+      const uploadRes = await fetch("/api/upload", { method: "POST", body: uploadForm });
+      if (!uploadRes.ok) {
+        const err = await uploadRes.json().catch(() => ({}));
+        throw new Error(err.error || `Upload failed (${uploadRes.status})`);
+      }
+      const { publicUrl, key } = await uploadRes.json();
 
       setLoadingMsg(mode === "melody" ? "Orchestrating your melody…" : mode === "style" ? "Composing full track with AI…" : mode === "loops" ? "Generating instrument loops…" : "Starting stem separation…");
       const genRes = await fetch("/api/generate", {
@@ -193,7 +194,7 @@ function sliderLabel(val: number) {
               : "text-white/50 hover:text-white/80"
           }`}
         >
-          🎼 Orchestrate Melody
+          🎼 Producer Arrangement
         </button>
         <button
           onClick={() => setMode("style")}
@@ -230,13 +231,13 @@ function sliderLabel(val: number) {
       {mode === "melody" && (
         <div className="mb-6 p-3 rounded-xl bg-violet-500/5 border border-violet-500/20 space-y-3">
           <p className="text-white/50 text-xs">
-            Upload your melody or piano demo — AI orchestrates a full arrangement that <strong className="text-white/70">follows your exact melody</strong>. Describe the style below.
+            Best quality path: upload a vocal, piano, guitar, or rough demo — AI creates a fuller band arrangement while trying to preserve the original musical idea. Describe the desired production below.
           </p>
           <input
             type="text"
             value={stylePrompt}
             onChange={(e) => setStylePrompt(e.target.value)}
-            placeholder="e.g. cinematic orchestral worship, strings, piano, choir, full band..."
+            placeholder="e.g. Nashville country band, acoustic worship ballad, indie rock, piano-led pop..."
             className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-violet-500/50"
           />
         </div>
@@ -258,14 +259,14 @@ function sliderLabel(val: number) {
       {mode === "loops" && (
         <div className="mb-6 p-1.5 rounded-xl bg-amber-500/5 border border-amber-500/20">
           <p className="text-white/50 text-xs px-3 pt-2 pb-3">
-            Generates clean 8-second instrument loops (drums, bass, guitar, keys, strings) matched to your BPM and key. Loops play continuously in the mix.
+            Experimental mode: generates short instrument loops matched to your BPM/key. Useful for ideas, but not the flagship quality path.
           </p>
         </div>
       )}
       {mode === "separate" && (
         <div className="mb-6 p-1.5 rounded-xl bg-blue-500/5 border border-blue-500/20">
           <p className="text-white/50 text-xs px-3 pt-2 pb-3">
-            Isolates the existing instruments from your uploaded track (vocals, bass, drums, guitar, piano, other).
+            Utility mode: separates existing instruments from an uploaded recording. Helpful for analysis and remixing, not for creating a new band arrangement.
           </p>
         </div>
       )}
@@ -366,15 +367,6 @@ function sliderLabel(val: number) {
         )}
       </div>
 
-      {/* Style hint */}
-      <input
-        type="text"
-        value={prompt}
-        onChange={e => setPrompt(e.target.value)}
-        placeholder="Style hint (optional) — e.g. 'worship ballad', 'upbeat pop'"
-        className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-white/30 mb-6 focus:outline-none focus:border-violet-500"
-      />
-
       {/* Per-stem sliders (loops mode only) */}
       {mode === "loops" && (
         <div className="mb-8 space-y-3">
@@ -415,7 +407,7 @@ function sliderLabel(val: number) {
                 Add Instruments
               </h3>
               <span className="text-xs text-white/30">
-                {extraStems.length}/4 slots · {extraStems.length < 2 ? "free" : "Creator/Pro"}
+                {extraStems.length}/4 slots
               </span>
             </div>
 
@@ -490,16 +482,12 @@ function sliderLabel(val: number) {
             {/* Added variant chips — each removable */}
             {extraStems.length > 0 && (
               <div className="flex flex-col gap-1.5">
-                {extraStems.map((variantId, i) => {
+                {extraStems.map((variantId) => {
                   const label = VARIANT_LABELS[variantId] ?? variantId;
-                  const isPaid = i >= 1; // first is free, 2-4 require Creator/Pro
                   return (
                     <div key={variantId} className="flex items-center justify-between bg-white/5 border border-white/10 rounded-lg px-3 py-1.5">
                       <span className="text-sm text-white/80">{label}</span>
                       <div className="flex items-center gap-2">
-                        {isPaid && (
-                          <span className="text-[10px] bg-violet-700/60 text-violet-200 px-1.5 py-0.5 rounded-full">Creator+</span>
-                        )}
                         <button
                           onClick={() => setExtraStems(prev => prev.filter(s => s !== variantId))}
                           className="text-white/30 hover:text-white/70 text-xs transition"
@@ -512,9 +500,7 @@ function sliderLabel(val: number) {
                 })}
                 <p className="text-xs text-violet-400 mt-1">
                   +{extraStems.length} track{extraStems.length > 1 ? "s" : ""} · ~{extraStems.length * 30}s extra render time
-                  {extraStems.length >= 2 && (
-                    <span className="ml-2 text-violet-300/60">· Creator/Pro plan required</span>
-                  )}
+
                 </p>
               </div>
             )}
@@ -533,7 +519,7 @@ function sliderLabel(val: number) {
         disabled={!file || loading}
         className="w-full py-4 bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl font-semibold text-lg transition"
       >
-        {loading ? loadingMsg || "Working…" : mode === "melody" ? "Orchestrate →" : mode === "style" ? "Compose Style →" : mode === "loops" ? "Generate Loops →" : "Separate Stems →"}
+        {loading ? loadingMsg || "Working…" : mode === "melody" ? "Create Producer Arrangement →" : mode === "style" ? "Compose Style →" : mode === "loops" ? "Generate Loops →" : "Separate Stems →"}
       </button>
     </div>
   );

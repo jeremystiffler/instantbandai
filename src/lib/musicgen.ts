@@ -1,9 +1,14 @@
 /**
  * Audio generation helpers for InstantBandAI
  *
- * Two generation modes:
- *  "loops"   — Stable Audio Open: 8s instrument loops, looped client-side. Clean, isolated, musical.
- *  "fullmix" — ACE-Step: full stereo song from text prompt, 30–60s.
+ * Core quality strategy:
+ *  "melody"   — flagship path: user demo → melody-conditioned full-band arrangement.
+ *  "style"    — prompt-only full stereo composition for reference/backing-track ideas.
+ *  "loops"    — experimental short instrument loops, useful for sketching but not final quality.
+ *  "separate" — Demucs utility mode for analysis/remix prep.
+ *
+ * Product north star: preserve the uploaded musical idea while returning a believable,
+ * full-band performance. Anything that does not improve that should stay out of the core path.
  */
 
 // ryan5453/demucs — htdemucs_6s stem separator
@@ -234,6 +239,7 @@ export interface MusicGenMelodyInput {
   top_p: number;
   temperature: number;
   classifier_free_guidance: number;
+  multi_band_diffusion: boolean;
   output_format: string;
   normalization_strategy: string;
 }
@@ -253,17 +259,24 @@ export function buildMelodyOrchestrationInput(
 ): MusicGenMelodyInput {
   const bpmStr = bpm ? `${Math.round(bpm)} BPM, ` : "";
   const keyStr = key ? `in the key of ${key}, ` : "";
-  const prompt = `${bpmStr}${keyStr}${stylePrompt}`;
+  const arrangementBrief = [
+    bpmStr + keyStr + stylePrompt,
+    "preserve the uploaded melody, lyric phrasing, chord feel, and emotional contour",
+    "arrange as a cohesive full band performance with natural drums, bass, harmonic instruments, and tasteful supporting textures",
+    "avoid random genre changes, novelty sounds, atonal artifacts, clipping, noisy distortion, and over-busy parts",
+    "high-quality studio production, balanced mix, musical transitions, realistic performance",
+  ].join(", ");
 
   return {
-    prompt,
+    prompt: arrangementBrief,
     input_audio: melodyUrl,
     model_version: "stereo-melody-large",
-    duration,
+    duration: Math.min(Math.max(duration, 30), 60),
     top_k: 250,
     top_p: 0,
-    temperature: 1,
-    classifier_free_guidance: 4,
+    temperature: 0.85,
+    classifier_free_guidance: 5,
+    multi_band_diffusion: true,
     output_format: "mp3",
     normalization_strategy: "loudness",
   };
@@ -297,7 +310,7 @@ export function buildFullMixInput(
 ): AceStepInput {
   const bpmTag = bpm ? `${Math.round(bpm)} BPM` : "";
   const keyTag = key ? `key of ${key}` : "";
-  const tags = [prompt, bpmTag, keyTag, "high quality", "studio recording"]
+  const tags = [prompt, bpmTag, keyTag, "full arrangement", "high quality", "studio recording", "balanced mix", "realistic instruments"]
     .filter(Boolean).join(", ");
 
   return {
