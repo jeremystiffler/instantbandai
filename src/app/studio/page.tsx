@@ -722,7 +722,7 @@ function sliderLabel(val: number) {
       <div className="mb-6 rounded-xl border border-violet-400/20 bg-violet-500/[0.06] p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-violet-100">Former Projects</h2>
+            <h2 className="text-sm font-semibold text-violet-100">Projects</h2>
             <p className="mt-1 text-xs text-white/45">Open a saved project to reuse its audio, MIDI edits, BPM/key, and style settings.</p>
           </div>
           <button
@@ -730,7 +730,7 @@ function sliderLabel(val: number) {
             onClick={() => setProjectsOpen((open) => !open)}
             className="rounded-lg border border-violet-300/25 bg-violet-600/30 px-3 py-2 text-sm font-semibold text-violet-100 hover:bg-violet-500/40"
           >
-            {projectsOpen ? "Hide Projects" : `Open Former Projects${projects.length ? ` (${projects.length})` : ""}`}
+            {projectsOpen ? "Hide Projects" : `Open Projects${projects.length ? ` (${projects.length})` : ""}`}
           </button>
           <button
             type="button"
