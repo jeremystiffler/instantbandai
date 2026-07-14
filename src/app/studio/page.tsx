@@ -23,6 +23,8 @@ const DEFAULT_SLIDERS: Record<GenerateStem, number> = {
   drums: 0, bass: 0, guitar: 0, keys: 0, strings: 0, other: 0,
 };
 
+type StudioMode = "separate" | "melody" | "style" | "loops";
+
 type MelodyNote = {
   id: string;
   midi: number;
@@ -194,7 +196,7 @@ export default function StudioPage() {
   const [dragging, setDragging] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [mode, setMode] = useState<"separate" | "melody" | "style" | "loops">("melody");
+  const [mode, setMode] = useState<StudioMode | null>(null);
   const [stylePrompt, setStylePrompt] = useState("radio-ready full-band arrangement, preserve the original melody and phrasing, tasteful drums, bass, piano, guitars, warm pads, natural dynamics, high-quality studio production");
   const [sliders, setSliders] = useState<Record<GenerateStem, number>>({ ...DEFAULT_SLIDERS });
   const [extraStems, setExtraStems] = useState<string[]>([]);
@@ -229,7 +231,6 @@ export default function StudioPage() {
 
   // ── Audio analysis: duration + BPM + polyphonic MIDI note extraction ─────
   const analyzeFile = useCallback(async (f: File) => {
-    if (mode !== "melody" && mode !== "loops" && mode !== "style") return;
     setAnalyzing(true);
     setAnalysisProgress(0);
     setDetectedBpm(null);
@@ -250,49 +251,47 @@ export default function StudioPage() {
       while (bpm < 60) bpm *= 2;
       setDetectedBpm(Math.round(bpm));
 
-      if (mode === "melody") {
-        const { BasicPitch, outputToNotesPoly, addPitchBendsToNoteEvents, noteFramesToTime } = await import("@spotify/basic-pitch");
-        const frames: number[][] = [];
-        const onsets: number[][] = [];
-        const contours: number[][] = [];
-        const modelUrl = `${window.location.origin}/basic-pitch/model.json`;
-        const offline = new OfflineAudioContext(1, Math.ceil(audioBuf.duration * 22050), 22050);
-        const source = offline.createBufferSource();
-        source.buffer = audioBuf;
-        source.connect(offline.destination);
-        source.start(0);
-        const mono22kBuffer = await offline.startRendering();
-        const basicPitch = new BasicPitch(modelUrl);
-        await basicPitch.evaluateModel(
-          mono22kBuffer,
-          (f: number[][], o: number[][], c: number[][]) => {
-            frames.push(...f);
-            onsets.push(...o);
-            contours.push(...c);
-          },
-          (p: number) => setAnalysisProgress(Math.round(p * 100))
-        );
+      const { BasicPitch, outputToNotesPoly, addPitchBendsToNoteEvents, noteFramesToTime } = await import("@spotify/basic-pitch");
+      const frames: number[][] = [];
+      const onsets: number[][] = [];
+      const contours: number[][] = [];
+      const modelUrl = `${window.location.origin}/basic-pitch/model.json`;
+      const offline = new OfflineAudioContext(1, Math.ceil(audioBuf.duration * 22050), 22050);
+      const source = offline.createBufferSource();
+      source.buffer = audioBuf;
+      source.connect(offline.destination);
+      source.start(0);
+      const mono22kBuffer = await offline.startRendering();
+      const basicPitch = new BasicPitch(modelUrl);
+      await basicPitch.evaluateModel(
+        mono22kBuffer,
+        (f: number[][], o: number[][], c: number[][]) => {
+          frames.push(...f);
+          onsets.push(...o);
+          contours.push(...c);
+        },
+        (p: number) => setAnalysisProgress(Math.round(p * 100))
+      );
 
-        const rawNotes = noteFramesToTime(
-          addPitchBendsToNoteEvents(
-            contours,
-            outputToNotesPoly(frames, onsets, 0.38, 0.34, 8)
-          )
+      const rawNotes = noteFramesToTime(
+        addPitchBendsToNoteEvents(
+          contours,
+          outputToNotesPoly(frames, onsets, 0.38, 0.34, 8)
         )
-          .filter((n) => n.durationSeconds >= 0.03)
-          .slice(0, 260)
-          .map((n) => {
-            const tunedMidi = snapMidiToA440Semitone(n.pitchMidi);
-            return {
-              midi: tunedMidi,
-              start: n.startTimeSeconds,
-              duration: n.durationSeconds,
-              end: n.startTimeSeconds + n.durationSeconds,
-              velocity: n.amplitude,
-            };
-          });
-        setMelodyNotes(tempoQuantizeMelodyNotes(rawNotes, Math.round(bpm), audioBuf.duration));
-      }
+      )
+        .filter((n) => n.durationSeconds >= 0.03)
+        .slice(0, 260)
+        .map((n) => {
+          const tunedMidi = snapMidiToA440Semitone(n.pitchMidi);
+          return {
+            midi: tunedMidi,
+            start: n.startTimeSeconds,
+            duration: n.durationSeconds,
+            end: n.startTimeSeconds + n.durationSeconds,
+            velocity: n.amplitude,
+          };
+        });
+      setMelodyNotes(tempoQuantizeMelodyNotes(rawNotes, Math.round(bpm), audioBuf.duration));
       await ctx.close();
     } catch (e) {
       console.error("Audio analysis error", e);
@@ -301,7 +300,7 @@ export default function StudioPage() {
       setAnalyzing(false);
       setAnalysisProgress(0);
     }
-  }, [mode]);
+  }, []);
 
   // --- Drag & Drop ---
   const onDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setDragging(true); }, []);
@@ -311,6 +310,7 @@ export default function StudioPage() {
     setDragging(false);
     const dropped = e.dataTransfer.files[0];
     if (dropped && dropped.type.startsWith("audio/")) {
+      setMode(null);
       setFile(dropped);
       setError("");
       analyzeFile(dropped);
@@ -331,6 +331,7 @@ export default function StudioPage() {
         const blob = new Blob(chunksRef.current, { type: mimeType });
         const ext = mimeType.includes("webm") ? "webm" : "ogg";
         const recordedFile = new File([blob], `recording.${ext}`, { type: mimeType });
+        setMode(null);
         setFile(recordedFile);
         analyzeFile(recordedFile);
         stream.getTracks().forEach(t => t.stop());
@@ -358,7 +359,7 @@ function sliderLabel(val: number) {
 }
 
   async function handleGenerate() {
-    if (!file) return;
+    if (!file || !mode) return;
     setLoading(true);
     setError("");
     try {
@@ -386,7 +387,7 @@ function sliderLabel(val: number) {
           bpm: detectedBpm ?? undefined,
           musicKey: manualKey || undefined,
           duration: sourceDuration ?? undefined,
-          melodyNotes: mode === "melody" ? melodyNotes.filter((n) => n.enabled).map((n) => ({
+          melodyNotes: mode !== "separate" ? melodyNotes.filter((n) => n.enabled).map((n) => ({
             note: n.note,
             midi: Math.round(n.midi),
             start: Number(n.start.toFixed(3)),
@@ -420,6 +421,13 @@ function sliderLabel(val: number) {
       .filter((n) => n.enabled && previewTime >= n.start && previewTime <= n.end)
       .map((n) => n.id)
   );
+
+  const workflowOptions: Array<{ id: StudioMode; label: string; color: string; help: string }> = [
+    { id: "melody", label: "🎼 Producer Arrangement", color: "violet", help: "Use the uploaded audio + MIDI as the melody guide for a full-band arrangement." },
+    { id: "style", label: "✨ Style Compose", color: "emerald", help: "Compose a full stereo track using the detected BPM/key and your style prompt." },
+    { id: "loops", label: "🎛️ Instrument Loops", color: "amber", help: "Generate separate instrument loops matched to the analyzed timing." },
+    { id: "separate", label: "✂️ Separate", color: "blue", help: "Split the uploaded recording into stems." },
+  ];
 
   function syncPreviewMetadata() {
     const audio = previewAudioRef.current;
@@ -477,93 +485,9 @@ function sliderLabel(val: number) {
     <div className="max-w-2xl mx-auto px-6 py-16">
       <h1 className="text-3xl font-bold mb-8">Studio</h1>
 
-      {/* Mode Toggle */}
-      <div className="flex gap-1 mb-6 p-1 bg-white/5 rounded-xl border border-white/10 flex-wrap">
-        <button
-          onClick={() => setMode("melody")}
-          className={`flex-1 py-2.5 px-3 rounded-lg text-sm font-medium transition whitespace-nowrap ${
-            mode === "melody"
-              ? "bg-violet-600 text-white"
-              : "text-white/50 hover:text-white/80"
-          }`}
-        >
-          🎼 Producer Arrangement
-        </button>
-        <button
-          onClick={() => setMode("style")}
-          className={`flex-1 py-2.5 px-3 rounded-lg text-sm font-medium transition whitespace-nowrap ${
-            mode === "style"
-              ? "bg-emerald-600 text-white"
-              : "text-white/50 hover:text-white/80"
-          }`}
-        >
-          ✨ Style Compose
-        </button>
-        <button
-          onClick={() => setMode("loops")}
-          className={`flex-1 py-2.5 px-3 rounded-lg text-sm font-medium transition whitespace-nowrap ${
-            mode === "loops"
-              ? "bg-amber-600 text-white"
-              : "text-white/50 hover:text-white/80"
-          }`}
-        >
-          🎛️ Instrument Loops
-        </button>
-        <button
-          onClick={() => setMode("separate")}
-          className={`flex-1 py-2.5 px-3 rounded-lg text-sm font-medium transition whitespace-nowrap ${
-            mode === "separate"
-              ? "bg-blue-600 text-white"
-              : "text-white/50 hover:text-white/80"
-          }`}
-        >
-          ✂️ Separate
-        </button>
-      </div>
-
-      {mode === "melody" && (
-        <div className="mb-6 p-3 rounded-xl bg-violet-500/5 border border-violet-500/20 space-y-3">
-          <p className="text-white/50 text-xs">
-            Best quality path: upload a vocal, piano, guitar, or rough demo — AI creates a fuller band arrangement while trying to preserve the original musical idea. Describe the desired production below.
-          </p>
-          <input
-            type="text"
-            value={stylePrompt}
-            onChange={(e) => setStylePrompt(e.target.value)}
-            placeholder="e.g. Nashville country band, acoustic worship ballad, indie rock, piano-led pop..."
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-violet-500/50"
-          />
-        </div>
-      )}
-      {mode === "style" && (
-        <div className="mb-6 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 space-y-3">
-          <p className="text-white/50 text-xs">
-            AI composes an original full stereo backing track from scratch. Not melody-locked — more creative freedom. Describe the style below.
-          </p>
-          <input
-            type="text"
-            value={stylePrompt}
-            onChange={(e) => setStylePrompt(e.target.value)}
-            placeholder="e.g. cinematic, worship, acoustic guitar, piano, strings, 90 BPM..."
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-500/50"
-          />
-        </div>
-      )}
-      {mode === "loops" && (
-        <div className="mb-6 p-1.5 rounded-xl bg-amber-500/5 border border-amber-500/20">
-          <p className="text-white/50 text-xs px-3 pt-2 pb-3">
-            Experimental mode: generates short instrument loops matched to your BPM/key. Useful for ideas, but not the flagship quality path.
-          </p>
-        </div>
-      )}
-      {mode === "separate" && (
-        <div className="mb-6 p-1.5 rounded-xl bg-blue-500/5 border border-blue-500/20">
-          <p className="text-white/50 text-xs px-3 pt-2 pb-3">
-            Utility mode: separates existing instruments from an uploaded recording. Helpful for analysis and remixing, not for creating a new band arrangement.
-          </p>
-        </div>
-      )}
-
+      <p className="mb-6 text-sm text-white/45">
+        Upload or record audio first. InstantBandAI will analyze it, configure the MIDI guide, then ask what you want to do with that file.
+      </p>
 
       {/* Drop Zone */}
       <div
@@ -646,7 +570,7 @@ function sliderLabel(val: number) {
                 </div>
               </div>
             )}
-            {mode === "melody" && (
+            {file && (
               <div className="mt-4 rounded-xl border border-white/10 bg-black/25 p-3 text-left" onClick={(e) => e.stopPropagation()}>
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                   <div>
@@ -739,7 +663,7 @@ function sliderLabel(val: number) {
                 )}
               </div>
             )}
-            <button onClick={e => { e.stopPropagation(); setFile(null); setDetectedBpm(null); setManualKey(""); setMelodyNotes([]); setSourceDuration(null); }} className="mt-3 text-xs text-white/30 hover:text-white/60 underline">
+            <button onClick={e => { e.stopPropagation(); setFile(null); setMode(null); setDetectedBpm(null); setManualKey(""); setMelodyNotes([]); setSourceDuration(null); }} className="mt-3 text-xs text-white/30 hover:text-white/60 underline">
               Remove
             </button>
           </div>
@@ -751,8 +675,86 @@ function sliderLabel(val: number) {
             <p className="text-white/30 text-sm">MP3, WAV, M4A up to 256MB</p>
           </>
         )}
-        <input ref={inputRef} type="file" accept="audio/*" className="hidden" onChange={e => { const f = e.target.files?.[0] ?? null; setFile(f); setError(""); if (f) analyzeFile(f); }} />
+        <input ref={inputRef} type="file" accept="audio/*" className="hidden" onChange={e => { const f = e.target.files?.[0] ?? null; setMode(null); setFile(f); setError(""); if (f) analyzeFile(f); }} />
       </div>
+
+      {file && (
+        <div className="mb-6 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/40">Next step</p>
+              <h2 className="text-lg font-semibold text-white">What do you want to do with this file?</h2>
+            </div>
+            <span className={`rounded-full px-2.5 py-1 text-xs ${analyzing ? "bg-amber-500/10 text-amber-200" : "bg-emerald-500/10 text-emerald-200"}`}>
+              {analyzing ? `Configuring MIDI${analysisProgress ? ` ${analysisProgress}%` : "…"}` : "MIDI ready"}
+            </span>
+          </div>
+
+          {!analyzing ? (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {workflowOptions.map((option) => {
+              const selected = mode === option.id;
+              const selectedClasses = option.color === "violet" ? "border-violet-400/70 bg-violet-600/25 text-white" : option.color === "emerald" ? "border-emerald-400/70 bg-emerald-600/25 text-white" : option.color === "amber" ? "border-amber-400/70 bg-amber-600/25 text-white" : "border-blue-400/70 bg-blue-600/25 text-white";
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  disabled={analyzing}
+                  onClick={() => setMode(option.id)}
+                  className={`rounded-xl border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-40 ${selected ? selectedClasses : "border-white/10 bg-white/5 text-white/65 hover:border-white/25 hover:bg-white/10 hover:text-white"}`}
+                >
+                  <span className="block text-sm font-semibold">{option.label}</span>
+                  <span className="mt-1 block text-xs text-white/40">{option.help}</span>
+                </button>
+              );
+            })}
+          </div>
+          ) : null}
+        </div>
+      )}
+
+      {mode === "melody" && (
+        <div className="mb-6 p-3 rounded-xl bg-violet-500/5 border border-violet-500/20 space-y-3">
+          <p className="text-white/50 text-xs">
+            Producer arrangement uses the uploaded audio and configured MIDI as the musical spine. Describe the desired production below.
+          </p>
+          <input
+            type="text"
+            value={stylePrompt}
+            onChange={(e) => setStylePrompt(e.target.value)}
+            placeholder="e.g. Nashville country band, acoustic worship ballad, indie rock, piano-led pop..."
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-violet-500/50"
+          />
+        </div>
+      )}
+      {mode === "style" && (
+        <div className="mb-6 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 space-y-3">
+          <p className="text-white/50 text-xs">
+            Style compose uses the detected MIDI timing, BPM, key, and your prompt to generate a new full stereo track.
+          </p>
+          <input
+            type="text"
+            value={stylePrompt}
+            onChange={(e) => setStylePrompt(e.target.value)}
+            placeholder="e.g. cinematic, worship, acoustic guitar, piano, strings, 90 BPM..."
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-500/50"
+          />
+        </div>
+      )}
+      {mode === "loops" && (
+        <div className="mb-6 p-1.5 rounded-xl bg-amber-500/5 border border-amber-500/20">
+          <p className="text-white/50 text-xs px-3 pt-2 pb-3">
+            Instrument loops will follow the detected BPM/key and source duration from the configured MIDI analysis.
+          </p>
+        </div>
+      )}
+      {mode === "separate" && (
+        <div className="mb-6 p-1.5 rounded-xl bg-blue-500/5 border border-blue-500/20">
+          <p className="text-white/50 text-xs px-3 pt-2 pb-3">
+            Separate splits the uploaded recording into stems after analysis, without composing new parts.
+          </p>
+        </div>
+      )}
 
       {/* Record Button */}
       <div className="flex items-center gap-3 mb-6">
@@ -925,10 +927,10 @@ function sliderLabel(val: number) {
 
       <button
         onClick={handleGenerate}
-        disabled={!file || loading}
+        disabled={!file || !mode || analyzing || loading}
         className="w-full py-4 bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl font-semibold text-lg transition"
       >
-        {loading ? loadingMsg || "Working…" : mode === "melody" ? "Create Producer Arrangement →" : mode === "style" ? "Compose Style →" : mode === "loops" ? "Generate Loops →" : "Separate Stems →"}
+        {loading ? loadingMsg || "Working…" : analyzing ? "Configuring MIDI…" : !file ? "Upload audio to begin" : !mode ? "Choose what to do with this file" : mode === "melody" ? "Compose Producer Arrangement →" : mode === "style" ? "Compose Style →" : mode === "loops" ? "Generate Instrument Loops →" : "Separate Stems →"}
       </button>
     </div>
   );

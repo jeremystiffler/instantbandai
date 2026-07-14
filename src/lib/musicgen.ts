@@ -326,10 +326,17 @@ export function buildFullMixInput(
   bpm?: number | null,
   key?: string | null,
   duration = 45,
+  melodyNotes: MelodyNotePrompt[] = [],
 ): AceStepInput {
   const bpmTag = bpm ? `${Math.round(bpm)} BPM` : "";
   const keyTag = key ? `key of ${key}` : "";
-  const tags = [prompt, bpmTag, keyTag, "full arrangement", "high quality", "studio recording", "balanced mix", "realistic instruments"]
+  const safeNotes = Array.isArray(melodyNotes) ? melodyNotes.slice(0, 48) : [];
+  const midiTag = safeNotes.length
+    ? `follow uploaded MIDI contour: ${safeNotes
+        .map((n) => `${n.note ?? `MIDI ${n.midi}`} at ${Number(n.start ?? 0).toFixed(2)}s`)
+        .join("; ")}`
+    : "";
+  const tags = [prompt, bpmTag, keyTag, midiTag, "full arrangement", "high quality", "studio recording", "balanced mix", "realistic instruments"]
     .filter(Boolean).join(", ");
 
   return {

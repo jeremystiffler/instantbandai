@@ -125,7 +125,7 @@ export async function POST(req: Request) {
 
   // ─── STYLE MODE (ACE-Step — text-prompted full stereo track) ─────────────
   if (mode === "style") {
-    const input = buildFullMixInput(stylePrompt, bpm, musicKey, duration);
+    const input = buildFullMixInput(stylePrompt, bpm, musicKey, duration, melodyNotes);
     const generation = await prisma.generation.create({
       data: {
         userId: user.id,
