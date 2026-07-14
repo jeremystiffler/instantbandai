@@ -656,6 +656,35 @@ function sliderLabel(val: number) {
     setSaveStatus("");
   }
 
+  function startNewProject() {
+    setProjectId(null);
+    setProjectName("Untitled Project");
+    setFile(null);
+    setUploadedKey(null);
+    setUploadedUrl(null);
+    setUploadedMeta(null);
+    setDetectedBpm(null);
+    setManualKey("");
+    setSourceDuration(null);
+    setMelodyNotes([]);
+    setMode(null);
+    setStylePrompt("radio-ready full-band arrangement, preserve the original melody and phrasing, tasteful drums, bass, piano, guitars, warm pads, natural dynamics, high-quality studio production");
+    setSliders({ ...DEFAULT_SLIDERS });
+    setExtraStems([]);
+    setVariantPickerOpen(null);
+    setError("");
+    setDirty(false);
+    setSaveStatus("New project ready");
+    setPreviewTime(0);
+    setPreviewPlaying(false);
+    if (inputRef.current) inputRef.current.value = "";
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("project");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }
+
   function downloadMidi() {
     if (!melodyNotes.length) return;
     const blob = makeMidiFile(melodyNotes, detectedBpm, sourceDuration ?? Math.max(...melodyNotes.map((n) => n.end)));
@@ -703,6 +732,13 @@ function sliderLabel(val: number) {
           >
             {projectsOpen ? "Hide Projects" : `Open Former Projects${projects.length ? ` (${projects.length})` : ""}`}
           </button>
+          <button
+            type="button"
+            onClick={startNewProject}
+            className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/70 hover:bg-white/10 hover:text-white"
+          >
+            + New Project
+          </button>
         </div>
       </div>
 
@@ -719,6 +755,13 @@ function sliderLabel(val: number) {
             />
           </label>
           <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={startNewProject}
+              className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/60 hover:bg-white/10 hover:text-white"
+            >
+              New
+            </button>
             <button
               type="button"
               onClick={saveProject}
