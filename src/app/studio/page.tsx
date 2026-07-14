@@ -42,6 +42,13 @@ function midiToNoteName(midi: number) {
   return `${NOTE_NAMES[((rounded % 12) + 12) % 12]}${octave}`;
 }
 
+function snapMidiToA440Semitone(midi: number) {
+  // Basic Pitch can return slightly sharp/flat fractional MIDI values.
+  // Snap to 12-TET semitones where MIDI 69 = A4 = 440 Hz, so every
+  // generated/downloaded MIDI note is centered within a half-step grid.
+  return Math.max(0, Math.min(127, Math.round(midi)));
+}
+
 function clampVelocity(v: number) {
   return Math.max(1, Math.min(127, Math.round(v)));
 }
@@ -196,16 +203,19 @@ export default function StudioPage() {
         )
           .filter((n) => n.durationSeconds >= 0.05)
           .slice(0, 160)
-          .map((n, index) => ({
-            id: `${index}-${Math.round(n.startTimeSeconds * 1000)}-${n.pitchMidi}`,
-            midi: n.pitchMidi,
-            note: midiToNoteName(n.pitchMidi),
-            start: n.startTimeSeconds,
-            duration: n.durationSeconds,
-            end: n.startTimeSeconds + n.durationSeconds,
-            velocity: n.amplitude,
-            enabled: true,
-          }));
+          .map((n, index) => {
+            const tunedMidi = snapMidiToA440Semitone(n.pitchMidi);
+            return {
+              id: `${index}-${Math.round(n.startTimeSeconds * 1000)}-${tunedMidi}`,
+              midi: tunedMidi,
+              note: midiToNoteName(tunedMidi),
+              start: n.startTimeSeconds,
+              duration: n.durationSeconds,
+              end: n.startTimeSeconds + n.durationSeconds,
+              velocity: n.amplitude,
+              enabled: true,
+            };
+          });
         setMelodyNotes(notes);
       }
       await ctx.close();
@@ -533,8 +543,8 @@ function sliderLabel(val: number) {
                       {analyzing
                         ? `Listening for notes${analysisProgress ? `… ${analysisProgress}%` : "…"}`
                         : melodyNotes.length
-                        ? `${enabledNotes.length}/${melodyNotes.length} notes active · range ${melodyPitchRange} · source ${sourceDuration ? fmtSeconds(sourceDuration) : "—"}`
-                        : "Upload or record audio to detect notes. Click notes to mute; ✕ deletes wrong notes."}
+                        ? `${enabledNotes.length}/${melodyNotes.length} notes active · A440 snapped · range ${melodyPitchRange} · source ${sourceDuration ? fmtSeconds(sourceDuration) : "—"}`
+                        : "Upload or record audio to detect A440-snapped notes. Click notes to mute; ✕ deletes wrong notes."}
                     </p>
                   </div>
                   <div className="flex gap-2">
