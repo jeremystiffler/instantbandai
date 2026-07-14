@@ -205,18 +205,20 @@ export function buildLoopInput(
   stem: string,
   bpm?: number | null,
   key?: string | null,
+  duration = 8,
 ): StableAudioInput {
   const bpmStr = bpm ? `${Math.round(bpm)} BPM, ` : "";
   const keyStr = key ? `key of ${key}, ` : "";
+  const loopSeconds = Math.min(Math.max(Number(duration) || 8, 1), 47);
   const basePrompt = LOOP_PROMPTS[stem] ?? LOOP_PROMPTS["other"];
-  const prompt = `${bpmStr}${keyStr}${basePrompt}`;
+  const prompt = `${bpmStr}${keyStr}${loopSeconds.toFixed(2)} second loop, ${basePrompt}`;
   const negative = "distortion, noise, clipping, other instruments bleeding in, full mix, choir, vocals";
 
   return {
     prompt,
     negative_prompt: negative,
     seconds_start: 0,
-    seconds_total: 8,
+    seconds_total: loopSeconds,
     cfg_scale: 7,
     steps: 100,
     seed: -1,
@@ -244,6 +246,13 @@ export interface MusicGenMelodyInput {
   normalization_strategy: string;
 }
 
+type MelodyNotePrompt = {
+  note?: string;
+  midi?: number;
+  start?: number;
+  duration?: number;
+};
+
 /**
  * Build MusicGen input for melody-conditioned orchestration.
  * Uses stereo-melody-large: your melody audio drives the melodic structure,
@@ -256,22 +265,32 @@ export function buildMelodyOrchestrationInput(
   bpm?: number | null,
   key?: string | null,
   duration = 30,
+  melodyNotes: MelodyNotePrompt[] = [],
 ): MusicGenMelodyInput {
   const bpmStr = bpm ? `${Math.round(bpm)} BPM, ` : "";
   const keyStr = key ? `in the key of ${key}, ` : "";
+  const safeNotes = Array.isArray(melodyNotes) ? melodyNotes.slice(0, 80) : [];
+  const noteTimeline = safeNotes.length
+    ? `editable MIDI guide from upload: ${safeNotes
+        .map((n) => `${n.note ?? `MIDI ${n.midi}`}@${Number(n.start ?? 0).toFixed(2)}s/${Number(n.duration ?? 0).toFixed(2)}s`)
+        .join("; ")}`
+    : "";
+  const targetDuration = Math.min(Math.max(Number(duration) || 30, 5), 60);
   const arrangementBrief = [
     bpmStr + keyStr + stylePrompt,
+    noteTimeline,
     "preserve the uploaded melody, lyric phrasing, chord feel, and emotional contour",
+    `render the full mix at the same length as the uploaded recording: ${targetDuration.toFixed(2)} seconds`,
     "arrange as a cohesive full band performance with natural drums, bass, harmonic instruments, and tasteful supporting textures",
     "avoid random genre changes, novelty sounds, atonal artifacts, clipping, noisy distortion, and over-busy parts",
     "high-quality studio production, balanced mix, musical transitions, realistic performance",
-  ].join(", ");
+  ].filter(Boolean).join(", ");
 
   return {
     prompt: arrangementBrief,
     input_audio: melodyUrl,
     model_version: "stereo-melody-large",
-    duration: Math.min(Math.max(duration, 30), 60),
+    duration: targetDuration,
     top_k: 250,
     top_p: 0,
     temperature: 0.85,

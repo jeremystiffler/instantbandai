@@ -32,6 +32,7 @@ export async function POST(req: Request) {
     bpm,
     musicKey,
     duration = 45,
+    melodyNotes = [],
     stylePrompt = "radio-ready full-band arrangement, preserve the original melody and phrasing, tasteful drums, bass, piano, guitars, warm pads, natural dynamics, high-quality studio production",
   } = await req.json();
 
@@ -85,7 +86,7 @@ export async function POST(req: Request) {
   // ─── MELODY MODE (MusicGen stereo-melody-large) ──────────────────────────
   // Uploads a rough vocal/piano/guitar/demo → outputs the highest-quality current full-band arrangement path.
   if (mode === "melody") {
-    const input = buildMelodyOrchestrationInput(sourceUrl, stylePrompt, bpm, musicKey, duration);
+    const input = buildMelodyOrchestrationInput(sourceUrl, stylePrompt, bpm, musicKey, duration, melodyNotes);
     const generation = await prisma.generation.create({
       data: {
         userId: user.id,
@@ -183,7 +184,7 @@ export async function POST(req: Request) {
   (async () => {
     const stemPredictions = await startAllStemPredictions(
       allStemIds,
-      (stem) => buildLoopInput(stem, bpm, musicKey),
+      (stem) => buildLoopInput(stem, bpm, musicKey, duration),
       apiToken,
       webhookUrl,
       2000

@@ -23,6 +23,87 @@ const DEFAULT_SLIDERS: Record<GenerateStem, number> = {
   drums: 0, bass: 0, guitar: 0, keys: 0, strings: 0, other: 0,
 };
 
+type MelodyNote = {
+  id: string;
+  midi: number;
+  note: string;
+  start: number;
+  duration: number;
+  end: number;
+  velocity: number;
+  enabled: boolean;
+};
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+function midiToNoteName(midi: number) {
+  const rounded = Math.round(midi);
+  const octave = Math.floor(rounded / 12) - 1;
+  return `${NOTE_NAMES[((rounded % 12) + 12) % 12]}${octave}`;
+}
+
+function clampVelocity(v: number) {
+  return Math.max(1, Math.min(127, Math.round(v)));
+}
+
+function writeVarLen(value: number) {
+  const bytes = [value & 0x7f];
+  value >>= 7;
+  while (value > 0) {
+    bytes.unshift((value & 0x7f) | 0x80);
+    value >>= 7;
+  }
+  return bytes;
+}
+
+function writeTextMeta(type: number, text: string) {
+  const encoded = Array.from(new TextEncoder().encode(text));
+  return [0x00, 0xff, type, ...writeVarLen(encoded.length), ...encoded];
+}
+
+function makeMidiFile(notes: MelodyNote[], bpm: number | null, fileDuration: number) {
+  const ppq = 480;
+  const tempo = Math.max(40, Math.min(240, bpm ?? 120));
+  const microsPerQuarter = Math.round(60_000_000 / tempo);
+  const secondsToTicks = (seconds: number) => Math.max(0, Math.round(seconds * (tempo / 60) * ppq));
+
+  const events = notes
+    .filter((n) => n.enabled)
+    .flatMap((n) => {
+      const start = secondsToTicks(n.start);
+      const end = Math.max(start + 1, secondsToTicks(n.end));
+      const pitch = Math.max(0, Math.min(127, Math.round(n.midi)));
+      const velocity = clampVelocity(n.velocity * 127 || 88);
+      return [
+        { tick: start, order: 1, data: [0x90, pitch, velocity] },
+        { tick: end, order: 0, data: [0x80, pitch, 0] },
+      ];
+    })
+    .sort((a, b) => a.tick - b.tick || a.order - b.order);
+
+  const track: number[] = [
+    ...writeTextMeta(0x03, "InstantBandAI Upload Melody"),
+    0x00, 0xff, 0x51, 0x03,
+    (microsPerQuarter >> 16) & 0xff,
+    (microsPerQuarter >> 8) & 0xff,
+    microsPerQuarter & 0xff,
+    0x00, 0xc0, 0x00,
+  ];
+
+  let lastTick = 0;
+  for (const event of events) {
+    track.push(...writeVarLen(event.tick - lastTick), ...event.data);
+    lastTick = event.tick;
+  }
+
+  const finalTick = Math.max(lastTick, secondsToTicks(fileDuration));
+  track.push(...writeVarLen(finalTick - lastTick), 0xff, 0x2f, 0x00);
+
+  const header = [0x4d,0x54,0x68,0x64, 0x00,0x00,0x00,0x06, 0x00,0x00, 0x00,0x01, (ppq >> 8) & 0xff, ppq & 0xff];
+  const trackHeader = [0x4d,0x54,0x72,0x6b, (track.length >> 24) & 0xff, (track.length >> 16) & 0xff, (track.length >> 8) & 0xff, track.length & 0xff];
+  return new Blob([new Uint8Array([...header, ...trackHeader, ...track])], { type: "audio/midi" });
+}
+
 export default function StudioPage() {
   const { data: session, status } = useSession();
   const [file, setFile] = useState<File | null>(null);
@@ -41,6 +122,9 @@ export default function StudioPage() {
   const [detectedBpm, setDetectedBpm] = useState<number | null>(null);
   const [manualKey, setManualKey] = useState<string>("");  // user-selected key, "" = none
   const [analyzing, setAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [sourceDuration, setSourceDuration] = useState<number | null>(null);
+  const [melodyNotes, setMelodyNotes] = useState<MelodyNote[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -58,15 +142,19 @@ export default function StudioPage() {
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  // ── BPM detection via music-tempo (ACF beat tracker, ~200ms) ──────────────
+  // ── Audio analysis: duration + BPM + polyphonic MIDI note extraction ─────
   const analyzeFile = useCallback(async (f: File) => {
     if (mode !== "melody" && mode !== "loops" && mode !== "style") return;
     setAnalyzing(true);
+    setAnalysisProgress(0);
     setDetectedBpm(null);
+    setMelodyNotes([]);
+    setSourceDuration(null);
     try {
       const ctx = new AudioContext();
       const arrayBuf = await f.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(arrayBuf);
+      setSourceDuration(audioBuf.duration);
       // Mix down to mono
       const data = audioBuf.getChannelData(0);
       // music-tempo: ACF-based beat tracker, very fast
@@ -76,11 +164,57 @@ export default function StudioPage() {
       while (bpm > 180) bpm /= 2;
       while (bpm < 60) bpm *= 2;
       setDetectedBpm(Math.round(bpm));
+
+      if (mode === "melody") {
+        const { BasicPitch, outputToNotesPoly, addPitchBendsToNoteEvents, noteFramesToTime } = await import("@spotify/basic-pitch");
+        const frames: number[][] = [];
+        const onsets: number[][] = [];
+        const contours: number[][] = [];
+        const modelUrl = `${window.location.origin}/basic-pitch/model.json`;
+        const offline = new OfflineAudioContext(1, Math.ceil(audioBuf.duration * 22050), 22050);
+        const source = offline.createBufferSource();
+        source.buffer = audioBuf;
+        source.connect(offline.destination);
+        source.start(0);
+        const mono22kBuffer = await offline.startRendering();
+        const basicPitch = new BasicPitch(modelUrl);
+        await basicPitch.evaluateModel(
+          mono22kBuffer,
+          (f: number[][], o: number[][], c: number[][]) => {
+            frames.push(...f);
+            onsets.push(...o);
+            contours.push(...c);
+          },
+          (p: number) => setAnalysisProgress(Math.round(p * 100))
+        );
+
+        const notes = noteFramesToTime(
+          addPitchBendsToNoteEvents(
+            contours,
+            outputToNotesPoly(frames, onsets, 0.25, 0.25, 5)
+          )
+        )
+          .filter((n) => n.durationSeconds >= 0.05)
+          .slice(0, 160)
+          .map((n, index) => ({
+            id: `${index}-${Math.round(n.startTimeSeconds * 1000)}-${n.pitchMidi}`,
+            midi: n.pitchMidi,
+            note: midiToNoteName(n.pitchMidi),
+            start: n.startTimeSeconds,
+            duration: n.durationSeconds,
+            end: n.startTimeSeconds + n.durationSeconds,
+            velocity: n.amplitude,
+            enabled: true,
+          }));
+        setMelodyNotes(notes);
+      }
       await ctx.close();
     } catch (e) {
-      console.error("BPM detection error", e);
+      console.error("Audio analysis error", e);
+      setError("Could not analyze that audio file. You can still generate from it, but the MIDI note editor will be unavailable.");
     } finally {
       setAnalyzing(false);
+      setAnalysisProgress(0);
     }
   }, [mode]);
 
@@ -166,6 +300,13 @@ function sliderLabel(val: number) {
           stylePrompt: (mode === "style" || mode === "melody") ? stylePrompt : undefined,
           bpm: detectedBpm ?? undefined,
           musicKey: manualKey || undefined,
+          duration: sourceDuration ?? undefined,
+          melodyNotes: mode === "melody" ? melodyNotes.filter((n) => n.enabled).map((n) => ({
+            note: n.note,
+            midi: Math.round(n.midi),
+            start: Number(n.start.toFixed(3)),
+            duration: Number(n.duration.toFixed(3)),
+          })) : undefined,
         }),
       });
       if (!genRes.ok) {
@@ -182,6 +323,32 @@ function sliderLabel(val: number) {
   }
 
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const fmtSeconds = (s: number) => `${s.toFixed(2)}s`;
+  const enabledNotes = melodyNotes.filter((n) => n.enabled);
+  const melodyPitchRange = enabledNotes.length
+    ? `${midiToNoteName(Math.min(...enabledNotes.map((n) => n.midi)))}–${midiToNoteName(Math.max(...enabledNotes.map((n) => n.midi)))}`
+    : "—";
+
+  function toggleMelodyNote(id: string) {
+    setMelodyNotes((prev) => prev.map((n) => n.id === id ? { ...n, enabled: !n.enabled } : n));
+  }
+
+  function removeMelodyNote(id: string) {
+    setMelodyNotes((prev) => prev.filter((n) => n.id !== id));
+  }
+
+  function downloadMidi() {
+    if (!melodyNotes.length) return;
+    const blob = makeMidiFile(melodyNotes, detectedBpm, sourceDuration ?? Math.max(...melodyNotes.map((n) => n.end)));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${file?.name.replace(/\.[^/.]+$/, "") || "instantbandai-melody"}.mid`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   if (status === "loading") return (
     <div className="flex items-center justify-center min-h-[60vh] text-white/50">Loading...</div>
@@ -357,7 +524,77 @@ function sliderLabel(val: number) {
                 </div>
               </div>
             )}
-            <button onClick={e => { e.stopPropagation(); setFile(null); setDetectedBpm(null); setManualKey(""); }} className="mt-3 text-xs text-white/30 hover:text-white/60 underline">
+            {mode === "melody" && (
+              <div className="mt-4 rounded-xl border border-white/10 bg-black/25 p-3 text-left" onClick={(e) => e.stopPropagation()}>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300/80">MIDI melody map</p>
+                    <p className="text-xs text-white/35 mt-1">
+                      {analyzing
+                        ? `Listening for notes${analysisProgress ? `… ${analysisProgress}%` : "…"}`
+                        : melodyNotes.length
+                        ? `${enabledNotes.length}/${melodyNotes.length} notes active · range ${melodyPitchRange} · source ${sourceDuration ? fmtSeconds(sourceDuration) : "—"}`
+                        : "Upload or record audio to detect notes. Click notes to mute; ✕ deletes wrong notes."}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMelodyNotes((prev) => prev.map((n) => ({ ...n, enabled: true })))}
+                      disabled={!melodyNotes.length}
+                      className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-xs text-white/50 hover:text-white/80 disabled:opacity-30"
+                    >
+                      Restore all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadMidi}
+                      disabled={!enabledNotes.length}
+                      className="px-2.5 py-1 rounded-lg bg-violet-600/80 border border-violet-400/30 text-xs text-white hover:bg-violet-500 disabled:opacity-30"
+                    >
+                      Download MIDI
+                    </button>
+                  </div>
+                </div>
+
+                {melodyNotes.length > 0 && (
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    <div className="relative h-14 rounded-lg bg-zinc-950/80 border border-white/5 overflow-hidden">
+                      {melodyNotes.map((note) => {
+                        const left = sourceDuration ? Math.max(0, Math.min(100, (note.start / sourceDuration) * 100)) : 0;
+                        const width = sourceDuration ? Math.max(1.5, Math.min(100 - left, (note.duration / sourceDuration) * 100)) : 2;
+                        const top = 8 + (1 - ((note.midi - Math.min(...melodyNotes.map((n) => n.midi))) / Math.max(1, Math.max(...melodyNotes.map((n) => n.midi)) - Math.min(...melodyNotes.map((n) => n.midi))))) * 32;
+                        return (
+                          <button
+                            key={note.id}
+                            type="button"
+                            title={`${note.note} @ ${fmtSeconds(note.start)}`}
+                            onClick={() => toggleMelodyNote(note.id)}
+                            className={`absolute rounded-sm border transition ${note.enabled ? "bg-violet-400/80 border-violet-200/60" : "bg-white/10 border-white/15 opacity-40"}`}
+                            style={{ left: `${left}%`, width: `${width}%`, top: `${top}px`, height: "10px" }}
+                          />
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 text-xs text-white/35 px-1">
+                      <span>Note</span><span>Start</span><span>Length</span><span />
+                    </div>
+                    {melodyNotes.map((note) => (
+                      <div key={note.id} className={`grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 rounded-lg border px-2 py-1.5 ${note.enabled ? "bg-white/5 border-white/10" : "bg-white/[0.02] border-white/5 opacity-55"}`}>
+                        <button type="button" onClick={() => toggleMelodyNote(note.id)} className="text-left font-mono text-sm text-white/80 hover:text-violet-200">
+                          {note.enabled ? "■" : "□"} {note.note}
+                        </button>
+                        <span className="font-mono text-white/45">{fmtSeconds(note.start)}</span>
+                        <span className="font-mono text-white/45">{fmtSeconds(note.duration)}</span>
+                        <button type="button" onClick={() => removeMelodyNote(note.id)} className="text-white/30 hover:text-red-300 px-1">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <button onClick={e => { e.stopPropagation(); setFile(null); setDetectedBpm(null); setManualKey(""); setMelodyNotes([]); setSourceDuration(null); }} className="mt-3 text-xs text-white/30 hover:text-white/60 underline">
               Remove
             </button>
           </div>
