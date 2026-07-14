@@ -1,8 +1,9 @@
 "use client";
-import { useSession, signIn } from "next-auth/react";
+import { useSession } from "next-auth/react";
 import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { EXTRA_INSTRUMENT_OPTIONS, VARIANT_LABELS } from "@/lib/musicgen";
+import { AuthBox } from "@/components/auth-box";
 // Pre-import music-tempo so it's ready when the user drops a file
 import MusicTempo from "music-tempo";
 
@@ -173,10 +174,11 @@ function sliderLabel(val: number) {
   );
   if (!session) return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-      <p className="text-white/60">Sign in to use the studio</p>
-      <button onClick={() => signIn("google")} className="px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium transition">
-        Sign in with Google
-      </button>
+      <div className="text-center space-y-2">
+        <p className="text-white/80 text-xl font-semibold">Sign in to use the studio</p>
+        <p className="text-white/45 text-sm">Use Google, or create a regular email/password account.</p>
+      </div>
+      <AuthBox />
     </div>
   );
 
