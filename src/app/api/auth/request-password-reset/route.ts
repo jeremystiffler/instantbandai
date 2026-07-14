@@ -18,8 +18,7 @@ async function sendResetEmail(email: string, resetUrl: string) {
   const from = process.env.PASSWORD_RESET_FROM || "InstantBandAI <onboarding@resend.dev>";
 
   if (!apiKey) {
-    console.info(`[password-reset] RESEND_API_KEY missing. Reset link for ${email}: ${resetUrl}`);
-    return;
+    throw new Error("Password reset email is not configured yet.");
   }
 
   const response = await fetch("https://api.resend.com/emails", {
@@ -60,6 +59,10 @@ export async function POST(req: Request) {
   const generic = NextResponse.json({ ok: true, message: "If that email has an account, a reset link will be sent." });
 
   if (!email || !email.includes("@")) return generic;
+
+  if (!process.env.RESEND_API_KEY) {
+    return NextResponse.json({ error: "Password reset email is not configured yet. Please contact support." }, { status: 503 });
+  }
 
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) return generic;
