@@ -574,6 +574,12 @@ function sliderLabel(val: number) {
             start: Number(n.start.toFixed(3)),
             duration: Number(n.duration.toFixed(3)),
           })) : undefined,
+          disabledMelodyNotes: mode !== "separate" ? melodyNotes.filter((n) => !n.enabled).map((n) => ({
+            note: n.note,
+            midi: Math.round(n.midi),
+            start: Number(n.start.toFixed(3)),
+            duration: Number(n.duration.toFixed(3)),
+          })) : undefined,
         }),
       });
       if (!genRes.ok) {

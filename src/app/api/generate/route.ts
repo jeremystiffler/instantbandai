@@ -35,6 +35,7 @@ export async function POST(req: Request) {
     musicKey,
     duration = 45,
     melodyNotes = [],
+    disabledMelodyNotes = [],
     stylePrompt = "radio-ready full-band arrangement, preserve the original melody and phrasing, tasteful drums, bass, piano, guitars, warm pads, natural dynamics, high-quality studio production",
   } = await req.json();
 
@@ -93,7 +94,7 @@ export async function POST(req: Request) {
   // ─── MELODY MODE (MusicGen stereo-melody-large) ──────────────────────────
   // Uploads a rough vocal/piano/guitar/demo → outputs the highest-quality current full-band arrangement path.
   if (mode === "melody") {
-    const input = buildMelodyOrchestrationInput(sourceUrl, stylePrompt, bpm, musicKey, duration, melodyNotes);
+    const input = buildMelodyOrchestrationInput(sourceUrl, stylePrompt, bpm, musicKey, duration, melodyNotes, disabledMelodyNotes);
     const generation = await prisma.generation.create({
       data: {
         userId: user.id,
@@ -107,26 +108,25 @@ export async function POST(req: Request) {
       },
     });
 
-    (async () => {
-      try {
-        const predId = await startPrediction(
-          MUSICGEN_VERSION,
-          input as unknown as Record<string, unknown>,
-          apiToken,
-          webhookUrl
-        );
-        await prisma.generation.update({
-          where: { id: generation.id },
-          data: { stemPredictions: { fullmix: predId } },
-        });
-      } catch (e) {
-        console.error("MusicGen melody start failed:", e);
-        await prisma.generation.update({
-          where: { id: generation.id },
-          data: { status: "failed" },
-        });
-      }
-    })();
+    try {
+      const predId = await startPrediction(
+        MUSICGEN_VERSION,
+        input as unknown as Record<string, unknown>,
+        apiToken,
+        webhookUrl
+      );
+      await prisma.generation.update({
+        where: { id: generation.id },
+        data: { stemPredictions: { fullmix: predId } },
+      });
+    } catch (e) {
+      console.error("MusicGen melody start failed:", e);
+      await prisma.generation.update({
+        where: { id: generation.id },
+        data: { status: "failed" },
+      });
+      return NextResponse.json({ error: "Failed to start producer arrangement" }, { status: 500 });
+    }
 
     return NextResponse.json({ id: generation.id });
   }
@@ -147,26 +147,25 @@ export async function POST(req: Request) {
       },
     });
 
-    (async () => {
-      try {
-        const predId = await startPrediction(
-          ACE_STEP_VERSION,
-          input as unknown as Record<string, unknown>,
-          apiToken,
-          webhookUrl
-        );
-        await prisma.generation.update({
-          where: { id: generation.id },
-          data: { stemPredictions: { fullmix: predId } },
-        });
-      } catch (e) {
-        console.error("ACE-Step start failed:", e);
-        await prisma.generation.update({
-          where: { id: generation.id },
-          data: { status: "failed" },
-        });
-      }
-    })();
+    try {
+      const predId = await startPrediction(
+        ACE_STEP_VERSION,
+        input as unknown as Record<string, unknown>,
+        apiToken,
+        webhookUrl
+      );
+      await prisma.generation.update({
+        where: { id: generation.id },
+        data: { stemPredictions: { fullmix: predId } },
+      });
+    } catch (e) {
+      console.error("ACE-Step start failed:", e);
+      await prisma.generation.update({
+        where: { id: generation.id },
+        data: { status: "failed" },
+      });
+      return NextResponse.json({ error: "Failed to start style compose" }, { status: 500 });
+    }
 
     return NextResponse.json({ id: generation.id });
   }
@@ -191,26 +190,25 @@ export async function POST(req: Request) {
     },
   });
 
-  (async () => {
-    const stemPredictions = await startAllStemPredictions(
-      allStemIds,
-      (stem) => buildLoopInput(stem, bpm, musicKey, duration),
-      apiToken,
-      webhookUrl,
-      2000
-    );
-    if (Object.keys(stemPredictions).length > 0) {
-      await prisma.generation.update({
-        where: { id: generation.id },
-        data: { stemPredictions },
-      });
-    } else {
-      await prisma.generation.update({
-        where: { id: generation.id },
-        data: { status: "failed" },
-      });
-    }
-  })();
+  const stemPredictions = await startAllStemPredictions(
+    allStemIds,
+    (stem) => buildLoopInput(stem, bpm, musicKey, duration, melodyNotes),
+    apiToken,
+    webhookUrl,
+    2000
+  );
+  if (Object.keys(stemPredictions).length > 0) {
+    await prisma.generation.update({
+      where: { id: generation.id },
+      data: { stemPredictions },
+    });
+  } else {
+    await prisma.generation.update({
+      where: { id: generation.id },
+      data: { status: "failed" },
+    });
+    return NextResponse.json({ error: "Failed to start instrument loops" }, { status: 500 });
+  }
 
   return NextResponse.json({ id: generation.id });
 }

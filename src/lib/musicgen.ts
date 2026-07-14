@@ -206,13 +206,18 @@ export function buildLoopInput(
   bpm?: number | null,
   key?: string | null,
   duration = 8,
+  melodyNotes: MelodyNotePrompt[] = [],
 ): StableAudioInput {
   const bpmStr = bpm ? `${Math.round(bpm)} BPM, ` : "";
   const keyStr = key ? `key of ${key}, ` : "";
   const loopSeconds = Math.min(Math.max(Number(duration) || 8, 1), 47);
   const basePrompt = LOOP_PROMPTS[stem] ?? LOOP_PROMPTS["other"];
-  const prompt = `${bpmStr}${keyStr}${loopSeconds.toFixed(2)} second loop, ${basePrompt}`;
-  const negative = "distortion, noise, clipping, other instruments bleeding in, full mix, choir, vocals";
+  const guide = formatMelodyGuide(melodyNotes, 32);
+  const guidePrompt = guide
+    ? `Follow this edited MIDI contour for rhythm and pitch movement: ${guide}. `
+    : "";
+  const prompt = `${bpmStr}${keyStr}${loopSeconds.toFixed(2)} second loop, ${guidePrompt}${basePrompt}`;
+  const negative = "distortion, noise, clipping, other instruments bleeding in, full mix, choir, vocals, wrong key, sour notes";
 
   return {
     prompt,
@@ -253,6 +258,18 @@ type MelodyNotePrompt = {
   duration?: number;
 };
 
+function formatMelodyGuide(notes: MelodyNotePrompt[], maxNotes: number) {
+  const safeNotes = Array.isArray(notes) ? notes.slice(0, maxNotes) : [];
+  return safeNotes
+    .map((n) => {
+      const label = n.note ?? (typeof n.midi === "number" ? `MIDI ${Math.round(n.midi)}` : "note");
+      const start = Number(n.start ?? 0).toFixed(2);
+      const dur = Number(n.duration ?? 0).toFixed(2);
+      return `${label}@${start}s/${dur}s`;
+    })
+    .join("; ");
+}
+
 /**
  * Build MusicGen input for melody-conditioned orchestration.
  * Uses stereo-melody-large: your melody audio drives the melodic structure,
@@ -266,23 +283,28 @@ export function buildMelodyOrchestrationInput(
   key?: string | null,
   duration = 30,
   melodyNotes: MelodyNotePrompt[] = [],
+  disabledMelodyNotes: MelodyNotePrompt[] = [],
 ): MusicGenMelodyInput {
   const bpmStr = bpm ? `${Math.round(bpm)} BPM, ` : "";
   const keyStr = key ? `in the key of ${key}, ` : "";
-  const safeNotes = Array.isArray(melodyNotes) ? melodyNotes.slice(0, 80) : [];
-  const noteTimeline = safeNotes.length
-    ? `editable MIDI guide from upload: ${safeNotes
-        .map((n) => `${n.note ?? `MIDI ${n.midi}`}@${Number(n.start ?? 0).toFixed(2)}s/${Number(n.duration ?? 0).toFixed(2)}s`)
-        .join("; ")}`
+  const enabledGuide = formatMelodyGuide(melodyNotes, 80);
+  const disabledGuide = formatMelodyGuide(disabledMelodyNotes, 40);
+  const correctedGuide = enabledGuide
+    ? `edited MIDI correction map: use these enabled notes as the corrected pitch/timing contour: ${enabledGuide}`
+    : "";
+  const ignoredGuide = disabledGuide
+    ? `disabled gray notes are likely sour/wrong and should be ignored or corrected away from: ${disabledGuide}`
     : "";
   const targetDuration = Math.min(Math.max(Number(duration) || 30, 5), 60);
   const arrangementBrief = [
     bpmStr + keyStr + stylePrompt,
-    noteTimeline,
-    "preserve the uploaded melody, lyric phrasing, chord feel, and emotional contour",
+    "use the uploaded audio as the primary guide for phrasing, feel, emotion, timing, and dynamics",
+    correctedGuide,
+    ignoredGuide,
+    "when the edited MIDI correction map conflicts with the uploaded audio pitch, prefer the edited MIDI pitch map but keep the audio performance feel",
     `render the full mix at the same length as the uploaded recording: ${targetDuration.toFixed(2)} seconds`,
     "arrange as a cohesive full band performance with natural drums, bass, harmonic instruments, and tasteful supporting textures",
-    "avoid random genre changes, novelty sounds, atonal artifacts, clipping, noisy distortion, and over-busy parts",
+    "avoid random genre changes, novelty sounds, atonal artifacts, clipping, noisy distortion, over-busy parts, and sour melody notes",
     "high-quality studio production, balanced mix, musical transitions, realistic performance",
   ].filter(Boolean).join(", ");
 
@@ -330,12 +352,8 @@ export function buildFullMixInput(
 ): AceStepInput {
   const bpmTag = bpm ? `${Math.round(bpm)} BPM` : "";
   const keyTag = key ? `key of ${key}` : "";
-  const safeNotes = Array.isArray(melodyNotes) ? melodyNotes.slice(0, 48) : [];
-  const midiTag = safeNotes.length
-    ? `follow uploaded MIDI contour: ${safeNotes
-        .map((n) => `${n.note ?? `MIDI ${n.midi}`} at ${Number(n.start ?? 0).toFixed(2)}s`)
-        .join("; ")}`
-    : "";
+  const guide = formatMelodyGuide(melodyNotes, 48);
+  const midiTag = guide ? `follow edited MIDI contour: ${guide}` : "";
   const tags = [prompt, bpmTag, keyTag, midiTag, "full arrangement", "high quality", "studio recording", "balanced mix", "realistic instruments"]
     .filter(Boolean).join(", ");
 
