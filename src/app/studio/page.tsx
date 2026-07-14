@@ -66,9 +66,9 @@ function tempoQuantizeMelodyNotes(
   const mergeGapSeconds = gridSeconds;
   const velocities = rawNotes.map((n) => n.velocity).sort((a, b) => a - b);
   const dynamicVelocityFloor = velocities.length
-    ? velocities[Math.floor(velocities.length * 0.35)]
+    ? velocities[Math.floor(velocities.length * 0.38)]
     : 0;
-  const velocityFloor = Math.max(0.14, dynamicVelocityFloor * 0.85);
+  const velocityFloor = Math.max(0.15, dynamicVelocityFloor * 0.9);
 
   const quantized = rawNotes
     .filter((n) => n.velocity >= velocityFloor)
@@ -108,7 +108,7 @@ function tempoQuantizeMelodyNotes(
       // Keep chord support, but cap impossible/junky note clusters.
       .slice(0, 4)
       // One-grid blips must be confident; otherwise they're probably artifacts.
-      .filter((n) => n.duration > gridSeconds || n.velocity >= velocityFloor * 1.4)
+      .filter((n) => n.duration > gridSeconds || n.velocity >= velocityFloor * 1.5)
   );
 
   return cleaned
@@ -276,7 +276,7 @@ export default function StudioPage() {
         const rawNotes = noteFramesToTime(
           addPitchBendsToNoteEvents(
             contours,
-            outputToNotesPoly(frames, onsets, 0.36, 0.32, 8)
+            outputToNotesPoly(frames, onsets, 0.38, 0.34, 8)
           )
         )
           .filter((n) => n.durationSeconds >= 0.03)
