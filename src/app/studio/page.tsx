@@ -365,6 +365,13 @@ export default function StudioPage() {
     if (uploadedUrl) return { publicUrl: uploadedUrl, key: uploadedKey ?? "" };
     if (!file) throw new Error("Upload or load an audio file first.");
 
+    // Keep small files on the simple signed PUT path. Larger files use S3/R2
+    // multipart upload so no single browser request is large enough to trip a
+    // 413 from an edge/proxy limit.
+    if (file.size > 20 * 1024 * 1024) {
+      return uploadCurrentFileMultipart(file);
+    }
+
     const signedRes = await fetch("/api/upload-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -390,6 +397,87 @@ export default function StudioPage() {
     setUploadedKey(uploaded.key);
     setUploadedMeta({ name: file.name, size: file.size, type: file.type || signed.contentType });
     return uploaded;
+  }
+
+  async function uploadCurrentFileMultipart(fileToUpload: File) {
+    const initRes = await fetch("/api/upload-multipart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "init",
+        name: fileToUpload.name,
+        size: fileToUpload.size,
+        type: fileToUpload.type || "",
+      }),
+    });
+    if (!initRes.ok) {
+      const err = await initRes.json().catch(() => ({}));
+      throw new Error(err.error || `Upload setup failed (${initRes.status})`);
+    }
+
+    const multipart = await initRes.json() as {
+      key: string;
+      uploadId: string;
+      publicUrl: string;
+      contentType: string;
+    };
+    const partSize = 8 * 1024 * 1024;
+    const partCount = Math.ceil(fileToUpload.size / partSize);
+    const partNumbers: number[] = [];
+
+    try {
+      for (let index = 0; index < partCount; index += 1) {
+        const partNumber = index + 1;
+        setLoadingMsg(`Uploading audio… part ${partNumber}/${partCount}`);
+        const partRes = await fetch("/api/upload-multipart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "part",
+            key: multipart.key,
+            uploadId: multipart.uploadId,
+            partNumber,
+          }),
+        });
+        if (!partRes.ok) {
+          const err = await partRes.json().catch(() => ({}));
+          throw new Error(err.error || `Upload part setup failed (${partRes.status})`);
+        }
+        const { uploadUrl } = await partRes.json() as { uploadUrl: string };
+        const chunk = fileToUpload.slice(index * partSize, Math.min(fileToUpload.size, (index + 1) * partSize));
+        const uploadRes = await fetch(uploadUrl, { method: "PUT", body: chunk });
+        if (!uploadRes.ok) throw new Error(`Upload failed on part ${partNumber}/${partCount} (${uploadRes.status})`);
+        partNumbers.push(partNumber);
+      }
+
+      const completeRes = await fetch("/api/upload-multipart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "complete",
+          key: multipart.key,
+          uploadId: multipart.uploadId,
+          partNumbers,
+        }),
+      });
+      if (!completeRes.ok) {
+        const err = await completeRes.json().catch(() => ({}));
+        throw new Error(err.error || `Upload finalize failed (${completeRes.status})`);
+      }
+
+      const uploaded = { publicUrl: multipart.publicUrl, key: multipart.key };
+      setUploadedUrl(uploaded.publicUrl);
+      setUploadedKey(uploaded.key);
+      setUploadedMeta({ name: fileToUpload.name, size: fileToUpload.size, type: fileToUpload.type || multipart.contentType });
+      return uploaded;
+    } catch (error) {
+      await fetch("/api/upload-multipart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "abort", key: multipart.key, uploadId: multipart.uploadId }),
+      }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async function loadProjectList() {
