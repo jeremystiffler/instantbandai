@@ -365,17 +365,30 @@ export default function StudioPage() {
     if (uploadedUrl) return { publicUrl: uploadedUrl, key: uploadedKey ?? "" };
     if (!file) throw new Error("Upload or load an audio file first.");
 
-    const uploadForm = new FormData();
-    uploadForm.append("file", file);
-    const uploadRes = await fetch("/api/upload", { method: "POST", body: uploadForm });
-    if (!uploadRes.ok) {
-      const err = await uploadRes.json().catch(() => ({}));
-      throw new Error(err.error || `Upload failed (${uploadRes.status})`);
+    const signedRes = await fetch("/api/upload-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: file.name, size: file.size, type: file.type || "" }),
+    });
+    if (!signedRes.ok) {
+      const err = await signedRes.json().catch(() => ({}));
+      throw new Error(err.error || `Upload setup failed (${signedRes.status})`);
     }
-    const uploaded = await uploadRes.json() as { publicUrl: string; key: string };
+
+    const signed = await signedRes.json() as { uploadUrl: string; publicUrl: string; key: string; contentType: string };
+    const putRes = await fetch(signed.uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": signed.contentType },
+      body: file,
+    });
+    if (!putRes.ok) {
+      throw new Error(`Upload failed (${putRes.status})`);
+    }
+
+    const uploaded = { publicUrl: signed.publicUrl, key: signed.key };
     setUploadedUrl(uploaded.publicUrl);
     setUploadedKey(uploaded.key);
-    setUploadedMeta({ name: file.name, size: file.size, type: file.type || null });
+    setUploadedMeta({ name: file.name, size: file.size, type: file.type || signed.contentType });
     return uploaded;
   }
 
