@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { EXTRA_INSTRUMENT_OPTIONS, VARIANT_LABELS } from "@/lib/musicgen";
 import { AuthBox } from "@/components/auth-box";
+import { isSupportedAudioFile, SUPPORTED_AUDIO_LABEL } from "@/lib/audio-file";
 // Pre-import music-tempo so it's ready when the user drops a file
 import MusicTempo from "music-tempo";
 
@@ -309,13 +310,13 @@ export default function StudioPage() {
     e.preventDefault();
     setDragging(false);
     const dropped = e.dataTransfer.files[0];
-    if (dropped && dropped.type.startsWith("audio/")) {
+    if (isSupportedAudioFile(dropped)) {
       setMode(null);
       setFile(dropped);
       setError("");
       analyzeFile(dropped);
     }
-    else setError("Please drop an audio file (MP3, WAV, M4A).");
+    else setError(`Please drop an audio file (${SUPPORTED_AUDIO_LABEL}).`);
   }, [analyzeFile]);
 
   // --- Recording ---
@@ -672,10 +673,10 @@ function sliderLabel(val: number) {
         ) : (
           <>
             <p className="text-white/60 mb-2">Drop your audio file here or click to browse</p>
-            <p className="text-white/30 text-sm">MP3, WAV, M4A up to 256MB</p>
+            <p className="text-white/30 text-sm">{SUPPORTED_AUDIO_LABEL} up to 256MB</p>
           </>
         )}
-        <input ref={inputRef} type="file" accept="audio/*" className="hidden" onChange={e => { const f = e.target.files?.[0] ?? null; setMode(null); setFile(f); setError(""); if (f) analyzeFile(f); }} />
+        <input ref={inputRef} type="file" accept="audio/*,.mp3,.wav,.wave,.m4a,.mp4,.aac,.aif,.aiff,.flac,.ogg,.oga,.webm,.caf" className="hidden" onChange={e => { const f = e.target.files?.[0] ?? null; setMode(null); setError(""); if (f && !isSupportedAudioFile(f)) { setFile(null); setError(`Please choose an audio file (${SUPPORTED_AUDIO_LABEL}).`); return; } setFile(f); if (f) analyzeFile(f); }} />
       </div>
 
       {file && (

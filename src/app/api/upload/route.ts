@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { uploadBuffer, getPublicUrl } from "@/lib/r2";
 import { NextResponse } from "next/server";
+import { getAudioContentType, isSupportedAudioFile } from "@/lib/audio-file";
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -15,7 +16,7 @@ export async function POST(req: Request) {
     const file = formData.get("file") as File | null;
     if (!file) return NextResponse.json({ error: "No file provided" }, { status: 400 });
 
-    if (!file.type.startsWith("audio/")) {
+    if (!isSupportedAudioFile(file)) {
       return NextResponse.json({ error: "Please upload an audio file" }, { status: 400 });
     }
     if (file.size > 256 * 1024 * 1024) {
@@ -26,7 +27,7 @@ export async function POST(req: Request) {
     const buffer = Buffer.from(bytes);
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120);
     const key = `uploads/${crypto.randomUUID()}-${safeName}`;
-    await uploadBuffer(key, buffer, file.type || "audio/webm");
+    await uploadBuffer(key, buffer, getAudioContentType(file));
     const publicUrl = getPublicUrl(key);
     return NextResponse.json({ key, publicUrl });
   } catch (e: unknown) {
