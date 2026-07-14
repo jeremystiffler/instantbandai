@@ -3,6 +3,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getPublicUrl } from "@/lib/r2";
 import { NextResponse } from "next/server";
+import { ensureProjectSchema } from "@/lib/project-schema";
 import {
   DEMUCS_VERSION,
   MUSICGEN_VERSION,
@@ -26,6 +27,7 @@ export async function POST(req: Request) {
   const {
     key,
     sourceUrl: providedSourceUrl,
+    projectId,
     mode = "melody",        // flagship: "melody". Utility/experimental: "style" | "loops" | "separate"
     sliders = {},
     extraStems = [],
@@ -38,8 +40,12 @@ export async function POST(req: Request) {
 
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
   if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
+  await ensureProjectSchema();
 
   const sourceUrl = providedSourceUrl ?? getPublicUrl(key);
+  const safeProjectId = typeof projectId === "string"
+    ? (await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true } }))?.id ?? null
+    : null;
   const apiToken = process.env.REPLICATE_API_TOKEN!;
   const baseUrl = (process.env.NEXTAUTH_URL || "https://instantbandai.com").replace(/\/$/, "");
   const webhookUrl = `${baseUrl}/api/webhook/replicate`;
@@ -72,6 +78,7 @@ export async function POST(req: Request) {
     const generation = await prisma.generation.create({
       data: {
         userId: user.id,
+        projectId: safeProjectId,
         sourceUrl,
         status: "processing",
         replicateId: prediction.id,
@@ -90,6 +97,7 @@ export async function POST(req: Request) {
     const generation = await prisma.generation.create({
       data: {
         userId: user.id,
+        projectId: safeProjectId,
         sourceUrl,
         status: "processing",
         mode: "melody",
@@ -129,6 +137,7 @@ export async function POST(req: Request) {
     const generation = await prisma.generation.create({
       data: {
         userId: user.id,
+        projectId: safeProjectId,
         sourceUrl,
         status: "processing",
         mode: "style",
@@ -170,6 +179,7 @@ export async function POST(req: Request) {
   const generation = await prisma.generation.create({
     data: {
       userId: user.id,
+      projectId: safeProjectId,
       sourceUrl,
       status: "processing",
       mode: "generate",

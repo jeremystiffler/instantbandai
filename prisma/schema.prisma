@@ -17,6 +17,7 @@ model User {
   accounts         Account[]
   sessions         Session[]
   generations      Generation[]
+  projects         Project[]
   createdAt        DateTime     @default(now())
 }
 
@@ -57,6 +58,7 @@ model VerificationToken {
 model Generation {
   id          String   @id @default(cuid())
   userId      String
+  projectId   String?
   status      String   @default("pending")
   sourceUrl   String
   replicateId String?
@@ -64,6 +66,7 @@ model Generation {
   updatedAt   DateTime @updatedAt
 
   user        User     @relation(fields: [userId], references: [id])
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   bpm        Float?
   key        String?
   chords     String?         // JSON string: [{time, chord, duration}]
@@ -72,6 +75,31 @@ model Generation {
   stemSliders     Json?      // { drums:0, bass:0, guitar:0, keys:0, strings:0, other:0 } 0=mirror..100=original
   stemPredictions Json?      // { drums:"replId", bass:"replId", ... } — in-flight per-stem prediction IDs
   extraStems      Json?      // ["percussion", "acoustic-guitar"] — user-added instrument tracks
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  audioKey    String?
+  audioUrl    String
+  audioName   String?
+  audioSize   Int?
+  audioType   String?
+  duration    Float?
+  bpm         Float?
+  key         String?
+  mode        String?
+  stylePrompt String?
+  midiNotes   Json?
+  settings    Json?
+  generations Generation[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
 }
 
 
