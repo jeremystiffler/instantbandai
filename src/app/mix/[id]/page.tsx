@@ -30,6 +30,7 @@ interface Stems {
 
 interface Generation {
   id: string;
+  projectId?: string | null;
   status: string;
   sourceUrl: string;
   stems: Stems | null;
@@ -117,6 +118,7 @@ export default function MixPage() {
   const offsetRef = useRef<number>(0);
   const rafRef = useRef<number>(0);
   const clickBufferRef = useRef<AudioBuffer | null>(null);
+  const studioHref = generation?.projectId ? `/studio?project=${generation.projectId}` : "/studio";
 
   // ── Fetch generation ────────────────────────────────────────────────────
   const fetchGeneration = useCallback(async () => {
@@ -521,7 +523,7 @@ export default function MixPage() {
       {/* Header */}
       <div className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={() => router.push("/studio")} className="text-gray-400 hover:text-white text-sm">← Studio</button>
+          <button onClick={() => router.push(studioHref)} className="text-gray-400 hover:text-white text-sm">← Studio</button>
           <span className="text-gray-600">|</span>
           <h1 className="text-lg font-bold text-white">Your Mix</h1>
         </div>

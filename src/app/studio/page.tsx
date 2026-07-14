@@ -419,44 +419,49 @@ export default function StudioPage() {
     applyProject(data.project);
   }
 
+  async function persistCurrentProject(uploaded: { publicUrl: string; key: string }) {
+    const payload = {
+      name: projectName.trim() || uploadedMeta?.name || file?.name || "Untitled Project",
+      audioKey: uploaded.key,
+      audioUrl: uploaded.publicUrl,
+      audioName: uploadedMeta?.name || file?.name || "Saved audio",
+      audioSize: uploadedMeta?.size ?? file?.size ?? null,
+      audioType: uploadedMeta?.type ?? file?.type ?? null,
+      duration: sourceDuration,
+      bpm: detectedBpm,
+      key: manualKey || null,
+      mode,
+      stylePrompt,
+      midiNotes: melodyNotes,
+      settings: { sliders, extraStems },
+    };
+    const res = await fetch(projectId ? `/api/projects/${projectId}` : "/api/projects", {
+      method: projectId ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Could not save project");
+    }
+    const data = await res.json() as { project: SavedProject };
+    setProjectId(data.project.id);
+    setProjectName(data.project.name);
+    setDirty(false);
+    setSaveStatus("Saved");
+    return data.project;
+  }
+
   async function saveProject() {
     setSavingProject(true);
     setSaveStatus("");
     setError("");
     try {
       const uploaded = await uploadCurrentFile();
-      const payload = {
-        name: projectName.trim() || uploadedMeta?.name || file?.name || "Untitled Project",
-        audioKey: uploaded.key,
-        audioUrl: uploaded.publicUrl,
-        audioName: uploadedMeta?.name || file?.name || "Saved audio",
-        audioSize: uploadedMeta?.size ?? file?.size ?? null,
-        audioType: uploadedMeta?.type ?? file?.type ?? null,
-        duration: sourceDuration,
-        bpm: detectedBpm,
-        key: manualKey || null,
-        mode,
-        stylePrompt,
-        midiNotes: melodyNotes,
-        settings: { sliders, extraStems },
-      };
-      const res = await fetch(projectId ? `/api/projects/${projectId}` : "/api/projects", {
-        method: projectId ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Could not save project");
-      }
-      const data = await res.json() as { project: SavedProject };
-      setProjectId(data.project.id);
-      setProjectName(data.project.name);
-      setDirty(false);
-      setSaveStatus("Saved");
+      const savedProject = await persistCurrentProject(uploaded);
       await loadProjectList();
       const url = new URL(window.location.href);
-      url.searchParams.set("project", data.project.id);
+      url.searchParams.set("project", savedProject.id);
       window.history.replaceState(null, "", url.toString());
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Could not save project.");
@@ -552,6 +557,8 @@ function sliderLabel(val: number) {
     try {
       setLoadingMsg(file && !uploadedUrl ? "Uploading audio…" : "Preparing project…");
       const { publicUrl, key } = await uploadCurrentFile();
+      setLoadingMsg("Saving project…");
+      const savedProject = await persistCurrentProject({ publicUrl, key });
 
       setLoadingMsg(mode === "melody" ? "Orchestrating your melody…" : mode === "style" ? "Composing full track with AI…" : mode === "loops" ? "Generating instrument loops…" : "Starting stem separation…");
       const genRes = await fetch("/api/generate", {
@@ -560,7 +567,7 @@ function sliderLabel(val: number) {
         body: JSON.stringify({
           key,
           sourceUrl: publicUrl,
-          projectId: projectId ?? undefined,
+          projectId: savedProject.id,
           mode,
           sliders: mode === "loops" ? sliders : undefined,
           extraStems: mode === "loops" ? extraStems : undefined,
