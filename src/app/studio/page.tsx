@@ -690,6 +690,22 @@ function sliderLabel(val: number) {
         Upload or record audio first. InstantBandAI will analyze it, configure the MIDI guide, then ask what you want to do with that file.
       </p>
 
+      <div className="mb-6 rounded-xl border border-violet-400/20 bg-violet-500/[0.06] p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-violet-100">Former Projects</h2>
+            <p className="mt-1 text-xs text-white/45">Open a saved project to reuse its audio, MIDI edits, BPM/key, and style settings.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setProjectsOpen((open) => !open)}
+            className="rounded-lg border border-violet-300/25 bg-violet-600/30 px-3 py-2 text-sm font-semibold text-violet-100 hover:bg-violet-500/40"
+          >
+            {projectsOpen ? "Hide Projects" : `Open Former Projects${projects.length ? ` (${projects.length})` : ""}`}
+          </button>
+        </div>
+      </div>
+
       <div className="mb-6 rounded-xl border border-white/10 bg-white/[0.03] p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <label className="flex-1 text-xs font-semibold uppercase tracking-[0.18em] text-white/40">
@@ -716,7 +732,7 @@ function sliderLabel(val: number) {
               onClick={() => setProjectsOpen((open) => !open)}
               className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/60 hover:bg-white/10 hover:text-white"
             >
-              Open
+              Open Projects
             </button>
           </div>
         </div>

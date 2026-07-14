@@ -295,7 +295,7 @@ export function buildMelodyOrchestrationInput(
   const ignoredGuide = disabledGuide
     ? `disabled gray notes are likely sour/wrong and should be ignored or corrected away from: ${disabledGuide}`
     : "";
-  const targetDuration = Math.min(Math.max(Number(duration) || 30, 5), 60);
+  const targetDuration = Math.round(Math.min(Math.max(Number(duration) || 30, 5), 60));
   const arrangementBrief = [
     bpmStr + keyStr + stylePrompt,
     "use the uploaded audio as the primary guide for phrasing, feel, emotion, timing, and dynamics",
@@ -317,7 +317,9 @@ export function buildMelodyOrchestrationInput(
     top_p: 0,
     temperature: 0.85,
     classifier_free_guidance: 5,
-    multi_band_diffusion: true,
+    // Replicate MusicGen only supports MultiBand Diffusion with non-stereo models.
+    // Producer Arrangement uses stereo-melody-large, so this must stay false.
+    multi_band_diffusion: false,
     output_format: "mp3",
     normalization_strategy: "loudness",
   };
