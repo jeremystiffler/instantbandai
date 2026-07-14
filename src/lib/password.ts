@@ -1,4 +1,4 @@
-import { pbkdf2Sync, randomBytes, timingSafeEqual } from "crypto";
+import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual } from "crypto";
 
 const ITERATIONS = 310_000;
 const KEY_LENGTH = 32;
@@ -22,4 +22,12 @@ export function verifyPassword(password: string, storedHash: string | null | und
   const expected = Buffer.from(hash, "hex");
   if (candidate.length !== expected.length) return false;
   return timingSafeEqual(candidate, expected);
+}
+
+export function generateResetToken() {
+  return randomBytes(32).toString("base64url");
+}
+
+export function hashResetToken(token: string) {
+  return createHash("sha256").update(token).digest("hex");
 }
