@@ -117,6 +117,8 @@ export default function MixPage() {
   const audioBuffers = useRef<Map<string, AudioBuffer>>(new Map());
   const startTimeRef = useRef<number>(0);
   const offsetRef = useRef<number>(0);
+  const playingRef = useRef(false);
+  const playNonceRef = useRef(0);
   const rafRef = useRef<number>(0);
   const clickBufferRef = useRef<AudioBuffer | null>(null);
   const studioHref = generation?.projectId ? `/studio?project=${generation.projectId}` : "/studio";
@@ -326,28 +328,40 @@ export default function MixPage() {
     return track.volume / 100;
   }
 
-  async function handlePlay() {
-    if (playing) {
-      // Pause
-      sourceNodes.current.forEach(s => { try { s.stop(); } catch {} });
-      sourceNodes.current.clear();
-      offsetRef.current += audioCtxRef.current!.currentTime - startTimeRef.current;
-      cancelAnimationFrame(rafRef.current);
-      setPlaying(false);
-      return;
+  function stopPlayback(updateOffset = true) {
+    playNonceRef.current += 1;
+    const ctx = audioCtxRef.current;
+    if (updateOffset && ctx && playingRef.current) {
+      const nextOffset = offsetRef.current + (ctx.currentTime - startTimeRef.current);
+      offsetRef.current = duration ? Math.min(duration, Math.max(0, nextOffset)) : Math.max(0, nextOffset);
+      setCurrentTime(offsetRef.current);
     }
-
-    const ctx = audioCtxRef.current ?? new AudioContext();
-    audioCtxRef.current = ctx;
-
-    await loadAudioBuffers(ctx);
-
-    // Stop any existing
     sourceNodes.current.forEach(s => { try { s.stop(); } catch {} });
     sourceNodes.current.clear();
     gainNodes.current.clear();
+    cancelAnimationFrame(rafRef.current);
+    playingRef.current = false;
+    setPlaying(false);
+  }
 
-    const offset = offsetRef.current;
+  async function startPlaybackAt(rawOffset: number) {
+    const nonce = ++playNonceRef.current;
+    const ctx = audioCtxRef.current ?? new AudioContext();
+    audioCtxRef.current = ctx;
+    if (ctx.state === "suspended") await ctx.resume().catch(() => undefined);
+
+    await loadAudioBuffers(ctx);
+    if (nonce !== playNonceRef.current) return;
+
+    sourceNodes.current.forEach(s => { try { s.stop(); } catch {} });
+    sourceNodes.current.clear();
+    gainNodes.current.clear();
+    cancelAnimationFrame(rafRef.current);
+
+    const playbackDuration = duration || Math.max(0, ...Array.from(audioBuffers.current.values()).map((buf) => buf.duration));
+    const offset = playbackDuration ? Math.min(Math.max(0, rawOffset), Math.max(0, playbackDuration - 0.01)) : Math.max(0, rawOffset);
+    offsetRef.current = offset;
+    setCurrentTime(offset);
     startTimeRef.current = ctx.currentTime;
 
     for (const track of tracks) {
@@ -363,33 +377,60 @@ export default function MixPage() {
       src.buffer = buf;
       src.loop = Boolean(track.isLoop);
       src.connect(gain);
-      src.start(0, Math.min(offset, buf.duration - 0.01));
-      if (track.isLoop && duration > offset) {
-        try { src.stop(ctx.currentTime + (duration - offset)); } catch {}
+
+      const trackOffset = track.isLoop
+        ? (buf.duration > 0 ? offset % buf.duration : 0)
+        : Math.min(offset, Math.max(0, buf.duration - 0.01));
+      if (!track.isLoop && offset >= buf.duration) continue;
+
+      src.start(0, trackOffset);
+      if (track.isLoop && playbackDuration > offset) {
+        try { src.stop(ctx.currentTime + (playbackDuration - offset)); } catch {}
       }
       sourceNodes.current.set(track.id, src);
     }
 
+    playingRef.current = true;
     setPlaying(true);
     const tick = () => {
-      setCurrentTime(offsetRef.current + (ctx.currentTime - startTimeRef.current));
+      if (nonce !== playNonceRef.current) return;
+      const elapsed = offsetRef.current + (ctx.currentTime - startTimeRef.current);
+      const clamped = playbackDuration ? Math.min(elapsed, playbackDuration) : elapsed;
+      setCurrentTime(clamped);
+      if (playbackDuration && elapsed >= playbackDuration) {
+        stopPlayback(false);
+        offsetRef.current = playbackDuration;
+        setCurrentTime(playbackDuration);
+        return;
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
     tick();
   }
 
+  function handlePlay() {
+    if (playingRef.current) {
+      stopPlayback(true);
+      return;
+    }
+    void startPlaybackAt(offsetRef.current);
+  }
+
   function handleSeek(e: React.ChangeEvent<HTMLInputElement>) {
     const t = Number(e.target.value);
-    const wasPlaying = playing;
-    if (wasPlaying) {
-      sourceNodes.current.forEach(s => { try { s.stop(); } catch {} });
-      sourceNodes.current.clear();
-      cancelAnimationFrame(rafRef.current);
-      setPlaying(false);
-    }
+    const wasPlaying = playingRef.current;
+    stopPlayback(false);
     offsetRef.current = t;
     setCurrentTime(t);
-    if (wasPlaying) setTimeout(handlePlay, 50);
+    if (wasPlaying) void startPlaybackAt(t);
+  }
+
+  function resetPlayhead() {
+    const wasPlaying = playingRef.current;
+    stopPlayback(false);
+    offsetRef.current = 0;
+    setCurrentTime(0);
+    if (wasPlaying) void startPlaybackAt(0);
   }
 
   function updateVolume(id: string, vol: number) {
@@ -585,6 +626,14 @@ export default function MixPage() {
               <path d="M6.3 2.841A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/>
             </svg>
           )}
+        </button>
+
+        <button
+          onClick={resetPlayhead}
+          className="w-9 h-9 rounded-full bg-gray-800 hover:bg-gray-700 border border-gray-700 flex items-center justify-center text-gray-300 transition"
+          title="Reset playhead"
+        >
+          ⏮
         </button>
 
         <span className="text-gray-400 text-sm font-mono w-10">{formatTime(currentTime)}</span>
