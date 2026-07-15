@@ -210,7 +210,8 @@ export function buildLoopInput(
 ): StableAudioInput {
   const bpmStr = bpm ? `${Math.round(bpm)} BPM, ` : "";
   const keyStr = key ? `key of ${key}, ` : "";
-  const loopSeconds = Math.min(Math.max(Number(duration) || 8, 1), 47);
+  // Replicate's Stable Audio schema requires integer seconds_total.
+  const loopSeconds = Math.round(Math.min(Math.max(Number(duration) || 8, 1), 47));
   const basePrompt = LOOP_PROMPTS[stem] ?? LOOP_PROMPTS["other"];
   const guide = formatMelodyGuide(melodyNotes, 32);
   const guidePrompt = guide

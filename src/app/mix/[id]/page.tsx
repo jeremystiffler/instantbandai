@@ -66,6 +66,7 @@ interface TrackState {
   soloed: boolean;
   isClick?: boolean;
   isOriginal?: boolean;
+  isLoop?: boolean;
 }
 
 
@@ -141,7 +142,7 @@ export default function MixPage() {
       const extraArr = data.extraStems
         ? (typeof data.extraStems === "string" ? JSON.parse(data.extraStems) : data.extraStems)
         : [];
-      buildTracks(stemObj, data.sourceUrl, extraArr);
+      buildTracks(stemObj, data.sourceUrl, extraArr, data.mode);
 
       // Auto-run BPM + key + chord analysis if not already stored
       if (!data.bpm || !data.key || !data.chords) {
@@ -173,7 +174,7 @@ export default function MixPage() {
   }, [autoAnalyze]);
 
   // ── Build track list ─────────────────────────────────────────────────────
-  function buildTracks(stems: Stems, sourceUrl: string, extraStemsArr: string[] = []) {
+  function buildTracks(stems: Stems, sourceUrl: string, extraStemsArr: string[] = [], mode?: string | null) {
     // Melody / Style mode — single fullmix output
     if ((stems as Record<string, string>).fullmix) {
       const tracksArr = [
@@ -183,14 +184,15 @@ export default function MixPage() {
       return;
     }
     const EXTRA_COLORS = ["#f43f5e","#fb923c","#facc15","#34d399","#22d3ee","#a78bfa","#f472b6","#94a3b8","#c084fc","#4ade80"];
+    const isLoopMode = mode === "generate" || mode === "loops";
     const list: TrackState[] = [
-      { id: "drums",    label: "Drums",    emoji: "🥁", color: "#ef4444", url: stems.drums    ?? null, volume: 80, muted: false, soloed: false },
-      { id: "bass",     label: "Bass",     emoji: "🎸", color: "#f97316", url: stems.bass     ?? null, volume: 80, muted: false, soloed: false },
-      { id: "guitar",   label: "Guitar",   emoji: "🎸", color: "#eab308", url: stems.guitar   ?? null, volume: 80, muted: false, soloed: false },
-      { id: "keys",     label: "Keys",     emoji: "🎹", color: "#22c55e", url: stems.keys ?? (stems as Record<string,string>).piano ?? null, volume: 80, muted: false, soloed: false },
-      { id: "strings",  label: "Strings",  emoji: "🎻", color: "#06b6d4", url: stems.strings  ?? null, volume: 80, muted: false, soloed: false },
+      { id: "drums",    label: "Drums",    emoji: "🥁", color: "#ef4444", url: stems.drums    ?? null, volume: 80, muted: false, soloed: false, isLoop: isLoopMode },
+      { id: "bass",     label: "Bass",     emoji: "🎸", color: "#f97316", url: stems.bass     ?? null, volume: 80, muted: false, soloed: false, isLoop: isLoopMode },
+      { id: "guitar",   label: "Guitar",   emoji: "🎸", color: "#eab308", url: stems.guitar   ?? null, volume: 80, muted: false, soloed: false, isLoop: isLoopMode },
+      { id: "keys",     label: "Keys",     emoji: "🎹", color: "#22c55e", url: stems.keys ?? (stems as Record<string,string>).piano ?? null, volume: 80, muted: false, soloed: false, isLoop: isLoopMode },
+      { id: "strings",  label: "Strings",  emoji: "🎻", color: "#06b6d4", url: stems.strings  ?? null, volume: 80, muted: false, soloed: false, isLoop: isLoopMode },
       { id: "vocals",   label: "Vocals",   emoji: "🎤", color: "#3b82f6", url: stems.vocals   ?? null, volume: 80, muted: false, soloed: false },
-      { id: "other",    label: "Other",    emoji: "🎵", color: "#8b5cf6", url: stems.other    ?? null, volume: 80, muted: false, soloed: false },
+      { id: "other",    label: "Other",    emoji: "🎵", color: "#8b5cf6", url: stems.other    ?? null, volume: 80, muted: false, soloed: false, isLoop: isLoopMode },
       // Extra instrument tracks
       ...extraStemsArr.map((stemId, i) => ({
         id: stemId,
@@ -201,6 +203,7 @@ export default function MixPage() {
         volume: 80,
         muted: false,
         soloed: false,
+        isLoop: isLoopMode,
       })),
       { id: "click",    label: "Click",    emoji: "🖱️", color: "#94a3b8", url: null, volume: 60, muted: false, soloed: false, isClick: true },
       { id: "original", label: "Original", emoji: "📁", color: "#64748b", url: sourceUrl, volume: 70, muted: false, soloed: false, isOriginal: true },
@@ -303,7 +306,8 @@ export default function MixPage() {
           const arr = await res.arrayBuffer();
           const buf = await ctx.decodeAudioData(arr);
           audioBuffers.current.set(t.id, buf);
-          if (!duration) setDuration(buf.duration);
+          if (t.isOriginal) setDuration(buf.duration);
+          else if (!duration) setDuration(buf.duration);
         } catch (e) { console.error("Failed to load", t.id, e); }
       })
     );
@@ -357,8 +361,12 @@ export default function MixPage() {
 
       const src = ctx.createBufferSource();
       src.buffer = buf;
+      src.loop = Boolean(track.isLoop);
       src.connect(gain);
       src.start(0, Math.min(offset, buf.duration - 0.01));
+      if (track.isLoop && duration > offset) {
+        try { src.stop(ctx.currentTime + (duration - offset)); } catch {}
+      }
       sourceNodes.current.set(track.id, src);
     }
 
